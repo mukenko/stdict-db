@@ -221,3 +221,4 @@ __marimo__/
 .env
 data/
 *.sqlite
+docs/stdict-db-handoff.md
