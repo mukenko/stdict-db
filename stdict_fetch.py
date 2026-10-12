@@ -18,6 +18,7 @@
 import argparse
 import csv
 import datetime as dt
+import http.client
 import os
 import random
 import signal
@@ -138,8 +139,11 @@ class Client:
                 return text
             except urllib.error.HTTPError as e:
                 last = f"HTTP {e.code}"
-            except (urllib.error.URLError, TimeoutError, OSError) as e:
+            except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as e:
+                # IncompleteRead 등 http.client 예외는 OSError 가 아니므로 따로 잡아야 한다
                 last = f"네트워크 오류 ({type(e).__name__})"
+            except UnicodeDecodeError:
+                last = "응답 디코딩 오류"
         raise ApiError(last)
 
     # -- view.do

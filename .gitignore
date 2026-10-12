@@ -221,4 +221,7 @@ __marimo__/
 .env
 data/
 *.sqlite
-docs/stdict-db-handoff.md
+/HANDOFF.md
+
+# stdict-db: 파이 배포용 서비스 파일(사용자·호스트 이름 포함)
+/stdict-mcp.service
