@@ -14,6 +14,7 @@ LLM이 기억이 아니라 사전을 보고 표기·발음·뜻·한자를 확�
 |---|---|
 | `stdict_fetch.py` | 사전 내용 API(`view.do`)로 전체 코드를 한 번씩 수집해 `data/raw.sqlite`에 원본 XML 저장 (이어받기, 하루 호출 상한 가드) |
 | `stdict_sync.py` | 이미 받은 것을 다시 확인: 고친 날짜 검색으로 변경 감지, 변경·삭제 기록, 어깨번호 보충(`supno`) |
+| `stdict_update.py` | 정기 업데이트: 변경 확인 → 어깨번호 보충 → 바뀐 것이 있으면 재빌드를 한 번에 (매일 한 번 launchd·cron으로 실행) |
 | `stdict_build.py` | 원본 → 조회용 DB(`data/stdict.sqlite`, FTS5 포함). 검증을 통과한 것만 교체 |
 | `stdict_lookup.py` | 조회 코어(표준 라이브러리만, 읽기 전용) + CLI |
 | `stdict_mcp.py` | MCP 서버(stdio, 선택적으로 Streamable HTTP) |
@@ -42,8 +43,18 @@ python3 stdict_lookup.py 연기                    # 조회
 python3 stdict_lookup.py 연:기 --by pronunciation   # 발음으로 찾기(ː 와 : 모두 가능)
 ```
 
-이후 갱신은 `python3 stdict_sync.py updates`(고친 날짜 검색)와 `refresh --tail`, `refresh --sample` 등으로 합니다.
-각 명령의 설명은 `python3 stdict_sync.py --help`를 보세요.
+### 정기 업데이트
+
+사전은 1년에 약 1%가 바뀝니다. 매일 한 번 `python3 stdict_update.py`를 실행하면(launchd·cron 등) 다음을 합니다.
+
+- 매일: 고친 날짜 검색(`updates`), 뒤쪽 신규 확인(`refresh --tail`), 가장 오래 확인하지 않은 코드 4,000개 재확인(`refresh --oldest`, 약 110일에 전체를 한 바퀴)
+- 일요일: 빈 코드 재확인, 무작위 표본 점검(날짜 검색이 놓친 변경이 있는지)
+- 바뀐 표제어 그룹의 어깨번호를 다시 받고, 바뀐 것이 있을 때만 `stdict_build.py`로 재빌드(검증을 통과해야 교체)
+- 하루 호출 상한 20,000건(`--limit`), 로그는 `data/update.log`(15일 보관). 표제어 교체·삭제 확정 같은 드문 일은 macOS 알림으로 알립니다.
+
+`--dry-run`으로 할 일만 확인하고, `--status`로 마지막 실행 결과를 봅니다. 폴더 동기화 스크립트와 겹치지 않도록 잠금 폴더를 같이 잡습니다
+(기본 `/tmp/rsync_to_rpi.lock`, 환경변수 `STDICT_UPDATE_LOCK`, 끄려면 `--no-lock`).
+개별 명령은 `python3 stdict_sync.py --help`를 보세요.
 
 ### MCP 서버
 
