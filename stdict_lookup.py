@@ -321,12 +321,14 @@ class Dictionary:
     INFER_POS = ("동사", "형용사", "보조 동사", "보조 형용사")
 
     def infer_base(self, norm, limit=8):
-        """사전에 활용형으로 실리지 않은 규칙 활용형(먹었다·갔다)에서 어미를 떼어 표제어 후보를 찾는다.
-        (코드 목록, {코드: 설명}). 후보 기본형이 동사·형용사 표제어로 실제 있는 것만 돌려준다."""
+        """사전에 활용형으로 실리지 않은 활용형(먹었다·갔다·들었다)에서 어미를 떼어 표제어 후보를 찾는다.
+        (코드 목록, {코드: 설명}). 두 근거만 쓴다: ① 규칙 활용: 어간+다 가 동사·형용사 표제어로 실제 있음
+        ② 불규칙 활용: 어간이 stem_alts(사전이 싣는 활용형에서 뽑은 불규칙 어간)에 있음. 근거를 설명에 적는다."""
         if " " in norm or len(norm) < 2:
             return [], {}
+        cands = stdict_stem.candidates(norm)
         rules = {}
-        for stem, rule in stdict_stem.candidates(norm):
+        for stem, rule in cands:
             rules.setdefault(stem + "다", rule)
         if not rules:
             return [], {}
@@ -336,9 +338,32 @@ class Dictionary:
                       f"AND EXISTS (SELECT 1 FROM pos_entries p WHERE p.target_code=e.target_code AND p.pos IN ({pos})) "
                       f"ORDER BY length(e.word_key) DESC, e.word_key, e.sup_no IS NULL, e.sup_no, e.target_code",
                       tuple(rules) + self.INFER_POS)
-        codes = [r[0] for r in rows][:limit]
-        notes = {r[0]: "규칙으로 추정: " + rules[r[1]] + f" → 기본형 '{r[1]}'" for r in rows if r[0] in codes}
+        found = [(r[0], "규칙으로 추정: " + rules[r[1]] + f" → 기본형 '{r[1]}'") for r in rows]
+        if self._has_table("stem_alts"):
+            stems = dict(cands)
+            smarks = ",".join("?" * len(stems))
+            for r in self.q(f"SELECT a.target_code, a.stem, a.source_form, e.word_key FROM stem_alts a "
+                            f"JOIN entries e ON e.target_code=a.target_code WHERE a.stem IN ({smarks}) "
+                            f"ORDER BY length(e.word_key) DESC, e.word_key, e.sup_no IS NULL, e.sup_no, e.target_code",
+                            tuple(stems)):
+                found.append((r[0], f"규칙으로 추정: {stems[r[1]]} → 기본형 '{r[3]}' "
+                                    f"(불규칙 활용: 사전에 활용형 '{r[2]}'가 실려 있어 어간이 '{r[1]}'로 바뀌는 것으로 봄)"))
+        codes, notes = [], {}
+        for code, note in found:
+            if code not in notes and len(codes) < limit:
+                codes.append(code)
+                notes[code] = note
         return codes, notes
+
+    def _has_table(self, name):
+        sig = self._signature()
+        cache = self.__dict__.setdefault("_tables", {})
+        if cache.get("sig") != sig:
+            cache.clear()
+            cache["sig"] = sig
+        if name not in cache:
+            cache[name] = bool(self.q("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)))
+        return cache[name]
 
     def _codes_by_form(self, norm, limit):
         where, params = "e.target_code IN (SELECT target_code FROM conjugations WHERE form=?)", (norm,)
@@ -480,7 +505,7 @@ def format_lookup(res):
         lines.append(f"「{q}」은(는) 표제어에 없습니다.")
         if res.get("inferred"):
             lines.append("  사전에 활용형으로 실려 있지는 않지만, 어미를 떼어 규칙으로 추정한 기본형 후보 "
-                         "(불규칙 활용이면 다른 표제어일 수 있음):")
+                         "(여기 없는 불규칙 활용이면 다른 표제어일 수 있음):")
         for b in res["base_forms"]:
             lines.append("  " + ("추정 기본형: " if res.get("inferred") else "활용형으로는 있음: ") + _hit_line(b, "form"))
         if res["suggestions"]:

@@ -29,8 +29,9 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import stdict_fetch as sf
+from stdict_stem import stem_variants
 
-SCHEMA_VERSION = "v4.1"        # v4 + pronunciations.pron_plain
+SCHEMA_VERSION = "v4.2"        # v4 + pronunciations.pron_plain(v4.1) + stem_alts(v4.2)
 CACHE_DIR = Path.home() / ".cache" / "stdict-db"
 OUT_PATH = sf.DB_PATH.parent / "stdict.sqlite"
 PREV_PATH = sf.DB_PATH.parent / "stdict.prev.sqlite"
@@ -336,6 +337,25 @@ def finish(db, args, raw):
         "FROM entries e")
     db.execute("INSERT INTO fts_defs(rowid, definition) SELECT sense_code, definition FROM senses WHERE definition IS NOT NULL")
     db.commit()
+    build_stem_alts(db)
+
+
+def build_stem_alts(db):
+    """동사·형용사가 사전에 싣는 활용형에서 불규칙 어간 변이형을 뽑아 stem_alts(stem, target_code, source_form)에 저장한다.
+    조회가 '들었다'에서 듣다(ㄷ 불규칙)를 근거와 함께 찾는 데 쓴다."""
+    print("불규칙 어간 변이형 추출...")
+    db.execute("CREATE TABLE stem_alts(stem TEXT NOT NULL, target_code INTEGER NOT NULL, source_form TEXT NOT NULL)")
+    forms = {}
+    for code, base, form in db.execute(
+            "SELECT e.target_code, e.word_key, c.form FROM entries e JOIN conjugations c USING(target_code) "
+            "WHERE e.word_key LIKE '%다' AND c.form IS NOT NULL AND EXISTS (SELECT 1 FROM pos_entries p "
+            "WHERE p.target_code=e.target_code AND p.pos IN ('동사','형용사','보조 동사','보조 형용사')) ORDER BY c.id"):
+        forms.setdefault((code, base), []).append(form)
+    rows = [(v, code, src) for (code, base), fs in forms.items() for v, src in stem_variants(base, fs).items()]
+    db.executemany("INSERT INTO stem_alts VALUES(?,?,?)", rows)
+    db.execute("CREATE INDEX stem_alts_stem ON stem_alts(stem)")
+    db.commit()
+    print(f"  {len(rows):,}개 ({len({r[1] for r in rows}):,}개 표제어)")
 
 
 # ---------------------------------------------------------------- 검증

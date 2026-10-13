@@ -87,7 +87,7 @@ def lookup_word(word: str, max_entries: int = 12, include_examples: bool = False
     (ː marks a long vowel), part of speech and definitions. When the homonyms are pronounced differently, the result
     starts with a summary that groups them by pronunciation; answer from that summary and the listed entries only. If the word is not an entry but is a conjugated or
     abbreviated form (e.g. 먹어 -> 먹다), the base word is shown; for regular conjugated forms not listed in the dictionary
-    (e.g. 갔다, 먹었다) a base-form candidate is shown labeled '규칙으로 추정' (rule-based guess, irregular verbs not covered); otherwise similar entries are suggested.
+    (e.g. 갔다, 먹었다) a base-form candidate is shown labeled '규칙으로 추정' (rule-based guess; irregular verbs only when the dictionary lists an altered stem); otherwise similar entries are suggested.
     Use this for spelling, pronunciation (including long vs short vowels), meaning, Hanja and homonym checks.
     Hyphens and spaces typed by the user are handled; do not add them yourself.
     Args: word = the Korean word or phrase, e.g. "연기"; max_entries = how many homonyms to show (default 12);

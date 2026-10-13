@@ -41,7 +41,7 @@ PAST = ("았", "었", "였")
 AEO = ("아", "어", "여")
 # 줄어든 과거(받침 ㅆ)와 줄어든 아/어(받침 없음)의 모음 -> 어간 끝 모음 후보
 _FUSE = {
-    _A: (_A,), _EO: (_EO,), _YEO: (_I, _YEO), _AE: (_AE,), _WA: (_O,), _WO: (_U,), _WAE: (_OE,), _E: (_E,),
+    _A: (_A,), _EO: (_EO,), _YEO: (_I, _YEO), _AE: (_AE,), 3: (3,), _WA: (_O,), _WO: (_U,), _WAE: (_OE,), _E: (_E,),
 }
 # 받침으로 붙는 어미: 받침 -> (뒤에 오는 말, 설명)
 _TAIL_T = {
@@ -104,6 +104,8 @@ def candidates(word):
         if not body:
             continue
         sp = _split(body[-1])
+        if sp and sp[2] == _T_SS and body[-1] in "랐렀" and len(body) > 1:      # 몰랐다 = 몰(르) + 라 + ㅆ (르 불규칙 후보)
+            add(body[:-1], f"어간 '{body[:-1]}' + 과거 '-{body[-1]}-'(라/러 + ㅆ)" + (f" + '-{tail}'" if tail else ""))
         if sp and sp[2] == _T_SS:
             fused = _join(sp[0], sp[1])
             for stem_last, how in _vowel_stems(fused):
@@ -135,3 +137,24 @@ def candidates(word):
         if stem.endswith("다") and len(stem) > 1:
             add(stem[:-1], f"기본형 '{stem}' + 어미 '-{word[len(stem):]}'")
     return list(found.items())
+
+
+_ENDING_SYLLABLES = frozenset("어아여으느이니러라려")     # 어미 조각: 변이 어간의 마지막 음절이 이것이면 어미가 덜 떨어진 것
+
+
+def stem_variants(base, forms):
+    """표제어 base(예: '듣다')에 사전이 싣는 활용형 forms(['들어', '들으니', '듣는'])에서 **불규칙으로 바뀐 어간**을 모은다.
+    {변이 어간: 그것을 보인 활용형}. 어간이 그대로인 활용형이나 규칙 줄임(마시+어→마셔)은 일반 규칙이 이미 다루므로 뺀다.
+    예: 듣다 -> {'들': '들어'}, 돕다 -> {'도오': '도와', '도우': '도우니'}, 쓰다 -> {'써': '써'}."""
+    base = unicodedata.normalize("NFC", base)
+    if not base.endswith("다") or len(base) < 2:
+        return {}
+    stem, out = base[:-1], {}
+    lead = max(len(stem) - 2, 0)
+    for form in forms:
+        for v, _ in candidates(form):
+            if (v == stem or abs(len(v) - len(stem)) > 1 or v[:lead] != stem[:lead] or v[-1] in _ENDING_SYLLABLES
+                    or v + "이" == stem or stem in dict(candidates(v))):
+                continue
+            out.setdefault(v, form)
+    return out
