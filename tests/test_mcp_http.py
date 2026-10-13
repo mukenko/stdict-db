@@ -222,5 +222,31 @@ class Running(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(TOKEN, err)
 
 
+@needs
+class Shutdown(unittest.IsolatedAsyncioTestCase):
+    async def test_exits_promptly_even_with_an_open_client_connection(self):
+        """MCP 클라이언트가 연결을 열어 둔 채여도 SIGTERM 뒤 몇 초 안에 끝나야 한다(systemctl restart 가 멈추지 않게)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tf = Path(tmp) / "token"
+            write_token(tf, TOKEN + "\n")
+            port = free_port()
+            proc = start(port, tf)
+            try:
+                self.assertTrue(wait_open(port, proc))
+                client = httpx.AsyncClient(headers={"Authorization": f"Bearer {TOKEN}"})
+                async with client:
+                    async with streamable_http_client(f"http://127.0.0.1:{port}/mcp", http_client=client) as (r, w, *_):
+                        async with ClientSession(r, w) as s:
+                            await s.initialize()
+                            proc.terminate()                                   # 연결을 연 채로 종료 신호
+                            t0 = time.monotonic()
+                            await asyncio.get_running_loop().run_in_executor(None, lambda: proc.wait(timeout=15))
+                            self.assertLess(time.monotonic() - t0, 12)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                proc.communicate()
+
+
 if __name__ == "__main__":
     unittest.main()

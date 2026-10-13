@@ -54,6 +54,11 @@ def normalize(text):
     return " ".join(re.sub(r"[-^]", "", text).split())
 
 
+def word_key(text):
+    """표제어 조회 키: 띄어쓰기까지 뺀다(어깨번호 그룹과 사전 검색이 이 기준으로 묶는다)."""
+    return normalize(text).replace(" ", "")
+
+
 def pron_key(text):
     """발음 검색용: DB 의 pron_norm 은 장음 ː 를 콜론(:)으로 적어 두었다."""
     return normalize(text).replace("ː", ":")
@@ -159,11 +164,12 @@ class Dictionary:
         norm = normalize(word)
         if not norm:
             raise StdictError("조회할 단어를 입력해 주세요.")
+        key = word_key(norm)
         codes = [r[0] for r in self.q(
-            "SELECT target_code FROM entries WHERE word_plain=? "
-            "ORDER BY sup_no IS NULL, sup_no, target_code", (norm,))]
+            "SELECT target_code FROM entries WHERE word_key=? "
+            "ORDER BY sup_no IS NULL, sup_no, target_code", (key,))]
         res = {"query": word, "normalized": norm, "total": len(codes), "shown": 0, "entries": [],
-               "pron_groups": self._pron_groups(norm) if len(codes) > 1 else [], "base_forms": [], "suggestions": []}
+               "pron_groups": self._pron_groups(key) if len(codes) > 1 else [], "base_forms": [], "suggestions": []}
         for code in codes[:max_entries]:
             res["entries"].append(self._entry(code, include_examples, include_cited))
         res["shown"] = len(res["entries"])
@@ -178,7 +184,7 @@ class Dictionary:
         by_code = {}
         for r in self.q(
                 "SELECT e.target_code, e.sup_no, e.original_text, p.pronunciation FROM entries e "
-                "LEFT JOIN pronunciations p ON p.target_code=e.target_code WHERE e.word_plain=? "
+                "LEFT JOIN pronunciations p ON p.target_code=e.target_code WHERE e.word_key=? "
                 "ORDER BY e.sup_no IS NULL, e.sup_no, e.target_code, p.seq", (norm,)):
             c = by_code.setdefault(r["target_code"], {"code": r["target_code"], "sup_no": r["sup_no"],
                                                        "original": r["original_text"], "prons": []})

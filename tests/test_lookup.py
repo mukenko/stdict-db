@@ -122,6 +122,19 @@ class Lookup(unittest.TestCase):
         self.assertEqual(self.d.lookup("가계-하다")["total"], base)
         self.assertEqual(self.d.lookup(unicodedata.normalize("NFD", "가계하다"))["total"], base)
 
+    def test_spacing_variants_are_one_headword(self):
+        """사전은 띄어쓰기를 무시하고 묶는다: '감정교육'(6716)과 '감정 교육'(387939)은 어깨번호 1·2."""
+        for q in ("감정교육", "감정 교육", "감정  교육"):
+            res = self.d.lookup(q)
+            self.assertEqual({e["target_code"] for e in res["entries"]}, {6716, 387939}, q)
+            self.assertEqual(sorted(e["sup_no"] for e in res["entries"]), [1, 2], q)
+
+    def test_all_homonym_numbers_are_assigned_except_known_gaps(self):
+        n_null = self.d.q("SELECT COUNT(*) FROM entries WHERE sup_no IS NULL")[0][0]
+        self.assertLess(n_null, 100)                              # supno 후: 검색 색인에 없는 로컬 항목 50건 안팎만 NULL
+        row = self.d.q("SELECT sup_no FROM entries WHERE target_code=236214")[0]
+        self.assertEqual(row[0], 9)                               # 연기⁹ 演技
+
     def test_max_entries_caps_output_and_reports_total(self):
         res = self.d.lookup("가", max_entries=3)
         self.assertGreater(res["total"], 3)

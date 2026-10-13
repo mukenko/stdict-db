@@ -219,7 +219,9 @@ def main():
         print(f"[stdict MCP] {info} / HTTP http://{HTTP_HOST}:{port}/mcp / 인증: 토큰 필요 / "
               f"허용 Host: {', '.join(_allowed_hosts())}", file=sys.stderr)
         app = _BearerAuth(server.streamable_http_app(host=HTTP_HOST, transport_security=_http_security()), token)
-        uvicorn.run(app, host=HTTP_HOST, port=port, log_level="warning")
+        # MCP 클라이언트는 SSE 연결을 계속 열어 두므로, 종료 신호를 받아도 연결이 닫히기를 기다리면 끝나지 않는다.
+        # 5초 뒤에는 남은 연결을 끊고 종료한다(systemctl restart/stop 이 멈추지 않게).
+        uvicorn.run(app, host=HTTP_HOST, port=port, log_level="warning", timeout_graceful_shutdown=5)
         return
     print(f"[stdict MCP] {info}", file=sys.stderr)
     server.run()      # 기본 transport = stdio
