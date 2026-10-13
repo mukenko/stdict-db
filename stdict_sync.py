@@ -626,8 +626,9 @@ SUPNO_MAX_CONSECUTIVE_ISSUES = 20       # 검색 결과가 로컬과 이만큼 �
 
 
 def plain_key(word):
-    """어깨번호는 하이픈(-)과 ^ 를 뺀 표제어 기준으로 매겨진다(실측: 철자 그대로 비교하면 43그룹이 어긋남)."""
-    return re.sub(r"[-^]", "", word)
+    """어깨번호는 하이픈(-), ^, 띄어쓰기를 뺀 표제어 기준으로 매겨진다(실측: 철자 그대로 비교하면 43그룹이 어긋나고,
+    띄어쓰기를 남기면 '감정교육'/'감정 교육'처럼 사전이 한 그룹으로 묶는 29그룹을 놓친다)."""
+    return re.sub(r"[-^\s]", "", word)
 
 
 def supno_groups(db):
@@ -689,8 +690,10 @@ def supno_search(client, plain):
             return total, hits
 
 
-def supno_check(plain, codes, known, total, hits):
-    """검색 결과가 로컬 그룹과 맞는지 검사한다. 이상 없으면 None, 있으면 (종류, 설명)."""
+def supno_check(plain, codes, known, total, hits, all_local=None):
+    """검색 결과가 로컬 그룹과 맞는지 검사한다. 이상 없으면 None.
+    ('partial', 설명): 번호는 믿을 수 있어 저장하되 알려 둘 것이 있는 경우(검색 색인에 없는 로컬 항목, 번호 0).
+    그 밖의 (종류, 설명): 저장하지 않는 이슈."""
     if len(hits) != total:
         return "total_mismatch", f"total {total}, 받은 항목 {len(hits)}"
     remote = {}
@@ -701,8 +704,15 @@ def supno_check(plain, codes, known, total, hits):
     if len(remote) != len(hits):
         return "dup_code", "같은 코드가 여러 번 나옴"
     local = set(codes)
-    if set(remote) != local:
-        return "set_mismatch", f"로컬에만 {sorted(local - set(remote))[:10]} / 검색에만 {sorted(set(remote) - local)[:10]}"
+    only_local, only_remote = local - set(remote), set(remote) - local
+    note = []
+    if only_remote:
+        missing = sorted(only_remote - (all_local or set()))
+        if missing:                                         # 로컬에 아예 없는 코드: 수집이 놓쳤을 가능성이 있어 저장하지 않는다
+            return "remote_only", f"검색에만 있고 로컬에 없는 코드 {missing[:10]}"
+        # 로컬에는 있지만 다른 그룹으로 저장된 코드(표기 차이): 번호는 검색 결과가 정확하므로 그대로 쓴다
+    if only_local:
+        note.append(f"로컬에만 있는 코드(검색 색인에 없음, 번호 알 수 없음) {sorted(only_local)[:10]}")
     nums = []
     for c, h in remote.items():
         if not h["sup_no"].isdigit():
@@ -712,11 +722,14 @@ def supno_check(plain, codes, known, total, hits):
         nums.append(int(h["sup_no"]))
     n = len(nums)
     if sorted(nums) != list(range(1, n + 1)) and not (n == 1 and nums == [0]):
-        return "sup_no_sequence", f"번호 {sorted(nums)[:12]}"
+        nz = [x for x in nums if x]                         # 0 은 '번호 없는 표기'(예: 같은 철자지만 표기가 달라 번호가 안 붙음)
+        if len(nz) != len(set(nz)) or (nz and max(nz) > len(local | set(remote))):
+            return "sup_no_sequence", f"번호 {sorted(nums)[:12]}"
+        note.append("번호 0(번호 없음)이 섞여 있음" if 0 in nums else "번호에 빈 자리가 있음")
     for c in codes:
-        if c in known and known[c] != int(remote[c]["sup_no"]):
+        if c in known and c in remote and known[c] != int(remote[c]["sup_no"]):
             return "link_conflict", f"{c}: 링크 {known[c]}, 검색 {remote[c]['sup_no']}"
-    return None
+    return ("partial", "; ".join(note)) if note else None
 
 
 def supno_status(args):
@@ -761,7 +774,8 @@ def cmd_supno(args):
     if not need:
         return
     client = sf.Client(sf.load_key(), db, args.limit, args.sleep)
-    saved_g = saved_c = errors = consecutive_issue = consecutive_err = 0
+    saved_g = saved_c = errors = consecutive_issue = consecutive_err = partial_n = 0
+    all_local = set(words)
     issues = Counter()
     completed = True
     try:
@@ -786,11 +800,14 @@ def cmd_supno(args):
                     break
                 continue
             consecutive_err = 0
-            problem = supno_check(plain, codes, known, total, hits)
+            problem = supno_check(plain, codes, known, total, hits, all_local)
+            partial = bool(problem and problem[0] == "partial")
+            if partial:
+                partial_n += 1
             if args.dry_run or args.verbose:
                 shown = ", ".join(f"{h['word']}={h['sup_no']}({h['target_code']})" for h in hits[:12])
                 print(f"  {plain}: total {total}, 로컬 {len(codes)}  {shown}" + (f"  ⚠ {problem[0]}: {problem[1]}" if problem else ""))
-            if problem:
+            if problem and not partial:
                 issues[problem[0]] += 1
                 consecutive_issue += 1
                 if not args.dry_run:
@@ -810,6 +827,11 @@ def cmd_supno(args):
                     for h in hits:
                         db.execute("INSERT OR REPLACE INTO search_hits VALUES(?,?,?,?,?,?)",
                                    (int(h["target_code"]), h["word"], h["sup_no"], h["origin"], h["pos"], t))
+                    if partial:                                 # 저장은 하되 알려 둘 것을 남긴다(빌드 검증이 예외로 인정)
+                        db.execute("INSERT OR REPLACE INTO supno_issues(plain, at, kind, local_n, remote_n, detail) "
+                                   "VALUES(?,?,?,?,?,?)", (plain, sf.now(), "partial", len(codes), total, problem[1]))
+                    else:                                       # 이전에 이슈였다가 해결된 경우 기록을 지운다
+                        db.execute("DELETE FROM supno_issues WHERE plain=?", (plain,))
                     if saved_g % 50 == 0:
                         db.commit()
             if i % 500 == 0:
@@ -820,7 +842,8 @@ def cmd_supno(args):
     if not args.dry_run:
         db.commit()
     mode = " (--dry-run: 저장하지 않았습니다)" if args.dry_run else ""
-    print(f"\n요약{mode}: 저장 {saved_g:,}종({saved_c:,}코드), 이슈 {sum(issues.values()):,}종, 조회 오류 {errors:,}")
+    print(f"\n요약{mode}: 저장 {saved_g:,}종({saved_c:,}코드, 그중 알려 둘 것이 있는 부분 저장 {partial_n:,}종), "
+          f"이슈 {sum(issues.values()):,}종, 조회 오류 {errors:,}")
     for kind, n in issues.most_common():
         print(f"  이슈 {kind}: {n:,}")
     print(f"오늘 호출 {client.used_today()}/{args.limit}")

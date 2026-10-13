@@ -80,7 +80,7 @@ TREE = {
 
 # ---------------------------------------------------------------- 스키마 v4
 TABLES = {  # 표 이름 -> 열 정의(삽입 순서)
-    "entries": "target_code INTEGER PRIMARY KEY, word TEXT NOT NULL, word_plain TEXT NOT NULL, sup_no INTEGER, "
+    "entries": "target_code INTEGER PRIMARY KEY, word TEXT NOT NULL, word_plain TEXT NOT NULL, word_key TEXT NOT NULL, sup_no INTEGER, "
                "sup_no_source TEXT, word_unit TEXT, word_type TEXT, original_text TEXT, origin TEXT, allomorph TEXT",
     "origins": "target_code INTEGER NOT NULL, seq INTEGER NOT NULL, original_language TEXT, language_type TEXT",
     "pronunciations": "target_code INTEGER NOT NULL, seq INTEGER NOT NULL, pronunciation TEXT, pron_norm TEXT",
@@ -104,6 +104,7 @@ NCOLS = {t: len(c.split(",")) for t, c in TABLES.items()}      # 열 정의에�
 
 INDEXES = """
 CREATE INDEX entries_word_plain ON entries(word_plain);
+CREATE INDEX entries_word_key ON entries(word_key);
 CREATE INDEX entries_word ON entries(word);
 CREATE INDEX origins_code ON origins(target_code);
 CREATE INDEX origins_lang ON origins(original_language);
@@ -149,8 +150,14 @@ def to_int(s):
 
 
 def plain_key(word):
-    """어깨번호는 하이픈(-)과 ^ 를 뺀 표제어 기준으로 매겨진다(stdict_sync.py supno 와 같은 규칙)."""
+    """하이픈(-)과 ^ 를 뺀 표제어(word_plain). 띄어쓰기는 남긴다."""
     return re.sub(r"[-^]", "", word)
+
+
+def word_key(word):
+    """하이픈·^·띄어쓰기를 모두 뺀 키(word_key). 어깨번호는 이 기준으로 매겨지고(stdict_sync.py supno 와 같은 규칙),
+    사전 검색도 '감정교육'/'감정 교육'을 같은 표제어로 묶는다."""
+    return re.sub(r"[-^\s]", "", word)
 
 
 # ---------------------------------------------------------------- 파싱
@@ -186,7 +193,7 @@ def parse_item(item, R, ids):
     if not word:
         raise BuildError(f"{code}: 표제어 없음")
     origins = wi.findall("original_language_info")
-    R["entries"].append((code, word, plain_key(word), None, None, tx(wi, "word_unit"), tx(wi, "word_type"),
+    R["entries"].append((code, word, plain_key(word), word_key(word), None, None, tx(wi, "word_unit"), tx(wi, "word_type"),
                          "".join(tx(o, "original_language") or "" for o in origins) or None,
                          tx(wi, "origin"), tx(wi, "allomorph")))
     for i, o in enumerate(origins):
@@ -303,8 +310,8 @@ def assign_sup_no(db, raw):
     db.execute("UPDATE entries SET sup_no=(SELECT n FROM link_sup WHERE code=entries.target_code), sup_no_source='link' "
                "WHERE sup_no IS NULL AND target_code IN (SELECT code FROM link_sup)")
     db.execute("DROP TABLE link_sup")
-    db.execute("UPDATE entries SET sup_no=0, sup_no_source='single' WHERE sup_no IS NULL AND word_plain IN "
-               "(SELECT word_plain FROM entries GROUP BY word_plain HAVING COUNT(*)=1)")
+    db.execute("UPDATE entries SET sup_no=0, sup_no_source='single' WHERE sup_no IS NULL AND word_key IN "
+               "(SELECT word_key FROM entries GROUP BY word_key HAVING COUNT(*)=1)")
     db.commit()
 
 
@@ -334,7 +341,7 @@ def scalar(db, sql, *a):
     return db.execute(sql, a).fetchone()[0]
 
 
-def validate(db, args, n_ok, tally, unknown, bad):
+def validate(db, args, n_ok, tally, unknown, bad, partial_keys=frozenset()):
     errors, warns = [], []
     # 1) 파싱 실패, 모르는 태그
     if bad:
@@ -374,15 +381,21 @@ def validate(db, args, n_ok, tally, unknown, bad):
             if row is None or row[0] != word or pron not in prons or (orig and row[1] != orig):
                 errors.append(f"골든 테스트 실패 {code}: 기대 ({word}, {pron}, {orig}), 실제 ({row}, {prons})")
     # 5) 어깨번호
-    groups = db.execute("SELECT word_plain, COUNT(*), COUNT(sup_no), MIN(sup_no), MAX(sup_no), COUNT(DISTINCT sup_no) "
-                        "FROM entries GROUP BY word_plain HAVING COUNT(*)>1").fetchall()
-    invalid = [g for g in groups if g[3] is not None and (g[3] < 1 or g[4] > g[1] or g[5] != g[2])]
+    # 번호 0 은 '번호 없는 표기'(검색 결과가 0 으로 돌려준 것)라서 허용한다. 0 이 아닌 번호는 서로 달라야 하고 그룹 크기를 넘지 않아야 한다.
+    groups = db.execute("SELECT word_key, COUNT(*), COUNT(sup_no), COUNT(NULLIF(sup_no,0)), MIN(NULLIF(sup_no,0)), "
+                        "MAX(sup_no), COUNT(DISTINCT NULLIF(sup_no,0)) FROM entries GROUP BY word_key HAVING COUNT(*)>1").fetchall()
+    invalid = [g for g in groups if g[3] and (g[5] > g[1] or g[6] != g[3])]
     incomplete = [g for g in groups if g[2] < g[1]]
+    known_gaps = [g for g in incomplete if g[0] in partial_keys]      # supno 가 '검색 색인에 없는 로컬 항목'으로 기록한 그룹
+    unexplained = [g for g in incomplete if g[0] not in partial_keys]
     if invalid:   # 시험 빌드(--limit)는 그룹 일부만 있으므로 번호가 그룹 크기를 넘는 것이 정상
         (warns if args.limit else errors).append(
             f"어깨번호가 1..n 규칙에 어긋난 중복 그룹 {len(invalid):,}개 (예: {[g[0] for g in invalid[:3]]})")
-    if incomplete:
-        msg = (f"어깨번호가 비어 있는 중복 그룹 {len(incomplete):,}개 → `stdict_sync.py supno` 로 보충 필요 "
+    if known_gaps:
+        warns.append(f"검색 색인에 없는 로컬 항목 때문에 어깨번호를 알 수 없는 중복 그룹 {len(known_gaps):,}개"
+                     f"({sum(g[1] - g[2] for g in known_gaps):,}건, supno_issues 에 'partial'로 기록된 알려진 예외, 번호 없이 표시됨)")
+    if unexplained:
+        msg = (f"어깨번호가 비어 있는 중복 그룹 {len(unexplained):,}개(알려진 예외 아님) → `stdict_sync.py supno` 로 보충 필요 "
                f"(sup_no NULL {scalar(db, 'SELECT COUNT(*) FROM entries WHERE sup_no IS NULL'):,}건)")
         (errors if args.require_supno else warns).append(msg)
     conflict = scalar(db, "SELECT COUNT(*) FROM relations r JOIN entries e ON e.target_code=r.link_code "
@@ -519,7 +532,11 @@ def main():
         db.executemany("INSERT INTO meta VALUES(?,?)", list(meta.items()))
         db.commit()
         print("검증...")
-        errors, warns = validate(db, args, min(args.limit, n_total) if args.limit else n_total, tally, unknown, bad)
+        try:
+            partial_keys = {r[0] for r in raw.execute("SELECT plain FROM supno_issues WHERE kind='partial'")}
+        except sqlite3.Error:
+            partial_keys = set()
+        errors, warns = validate(db, args, min(args.limit, n_total) if args.limit else n_total, tally, unknown, bad, partial_keys)
         if errors:
             raise BuildError("\n".join(errors))
         db.execute("ANALYZE")
