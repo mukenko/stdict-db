@@ -45,7 +45,12 @@ import stdict_fetch as sf
 ALL_CANDIDATES = [("가", "include", 1), (".", "include", 8), ("다", "include", 8), ("의", "include", 8)]
 ALL_Q = (".", "include", 8)
 PROBE_DEFAULT_LIMIT = sf.DEFAULT_LIMIT + 1000   # 수집이 45,000건까지 쓴 날에도 시험할 수 있도록 예비분을 조금 쓴다
-SEARCH_MAX = 1000                               # 검색 한 번에 볼 수 있는 최대 건수(start 1~1000)
+# search.do 의 start 는 항목 번호가 아니라 **페이지 번호**다(2026-10-13 실측: start=2,num=100 이 101~200번째 항목, start=45,num=100 이 4,401~4,467번째).
+# 명세의 "검색의 시작 번호"를 항목 오프셋으로 읽어 start += 100 으로 넘기면 둘째 페이지부터 빈 결과가 와서 100건에서 조용히 잘린다.
+# 한 검색으로 볼 수 있는 최대는 1000페이지 x 100건 = 100,000건이다(예전에 알던 '1,000건 상한'은 오해였다).
+PAGE_SIZE = 100
+MAX_PAGE = 1000
+SEARCH_MAX = PAGE_SIZE * MAX_PAGE
 BATCH = 50                                      # 이만큼 모아서 이상 징후를 검사한 뒤 한 번에 반영
 
 SYNC_SCHEMA = """
@@ -122,9 +127,9 @@ def item_info(item):
 
 
 # ---------------------------------------------------------------- 검색 (probe, updates 공용)
-def search(client, q, method, target=1, update_s=None, update_e=None, start=1, num=10, pos=None):
+def search(client, q, method, target=1, update_s=None, update_e=None, page=1, num=10, pos=None):
     params = {"q": q, "req_type": "xml", "advanced": "y", "target": str(target),
-              "method": method, "start": str(start), "num": str(num)}
+              "method": method, "start": str(page), "num": str(num)}
     if update_s:
         params["update_s"] = update_s
         params["update_e"] = update_e or update_s
@@ -218,16 +223,16 @@ def run_probe(args, db, client, today):
     # C. 최근 구간에서 걸린 코드를 로컬 상태와 대조
     s = today - dt.timedelta(days=args.days - 1)
     print(f"\nC. 최근 {args.days}일 구간({s.isoformat()} ~ {today.isoformat()})의 코드를 로컬 상태와 대조")
-    hits, start, total = [], 1, None
+    hits, page, total = [], 1, None
     while True:
-        r = attempt(client, f"start={start}", q=q, method=method, target=target,
-                    update_s=ymd(s), update_e=ymd(today), start=start, num=100)
+        r = attempt(client, f"page={page}", q=q, method=method, target=target,
+                    update_s=ymd(s), update_e=ymd(today), page=page, num=100)
         if r is None:
             break
         total, items = r
         hits += items
-        start += 100
-        if not items or start > total or start > SEARCH_MAX or len(hits) >= args.max_items:
+        page += 1
+        if not items or (page - 1) * PAGE_SIZE >= total or page > MAX_PAGE or len(hits) >= args.max_items:
             break
     if not hits:
         print("  걸린 항목이 없어서 대조할 수 없습니다.")
@@ -260,10 +265,10 @@ def run_probe(args, db, client, today):
 # ---------------------------------------------------------------- 변경 코드 찾기 (updates)
 def collect_changed(client, s, e, hits, warns, pos=None):
     """[s, e] 기간에 고친 날짜가 있는 항목을 hits(code -> 항목)에 모은다.
-    한 번에 1,000건까지만 볼 수 있으므로, 넘으면 날짜 구간을 절반씩 나누고,
+    한 번에 100,000건(1000페이지 x 100건)까지 볼 수 있으므로 보통은 나눌 일이 없지만, 넘으면 날짜 구간을 절반씩 나누고,
     하루짜리도 넘으면 품사(1~15)로 나눈다. 그래도 넘으면 경고를 남긴다."""
     q, method, target = ALL_Q
-    total, items = search(client, q, method, target, ymd(s), ymd(e), start=1, num=100, pos=pos)
+    total, items = search(client, q, method, target, ymd(s), ymd(e), page=1, num=PAGE_SIZE, pos=pos)
     if total == 0:
         return
     if total > SEARCH_MAX:
@@ -277,16 +282,14 @@ def collect_changed(client, s, e, hits, warns, pos=None):
                 collect_changed(client, s, e, hits, warns, pos=p)
             return
         warns.append(f"{s.isoformat()} 품사 {pos}: {total}건 중 앞의 {SEARCH_MAX}건만 확인")
-    start = 1
-    while True:
+    pages = -(-min(total, SEARCH_MAX) // PAGE_SIZE)
+    for page in range(1, pages + 1):
+        if page > 1:
+            total, items = search(client, q, method, target, ymd(s), ymd(e), page=page, num=PAGE_SIZE, pos=pos)
+            if not items:
+                break
         for it in items:
             hits[int(it["target_code"])] = it
-        start += 100
-        if start > min(total, SEARCH_MAX):
-            break
-        total, items = search(client, q, method, target, ymd(s), ymd(e), start=start, num=100, pos=pos)
-        if not items:
-            break
 
 
 def cmd_updates(args):
@@ -681,12 +684,12 @@ def supno_pending(db, groups, known, retry_issues):
 
 def supno_search(client, plain):
     """하이픈을 뺀 표제어를 일치 검색해 모든 동음이의어(하이픈 표제어 포함)를 받는다."""
-    hits, start = [], 1
+    hits, page = [], 1
     while True:
-        total, items = search(client, plain, "exact", 1, start=start, num=100)
+        total, items = search(client, plain, "exact", 1, page=page, num=PAGE_SIZE)
         hits += items
-        start += 100
-        if not items or len(hits) >= total or start > SEARCH_MAX:
+        page += 1
+        if not items or len(hits) >= total or page > MAX_PAGE:
             return total, hits
 
 

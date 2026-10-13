@@ -21,6 +21,7 @@ import datetime as dt
 import http.client
 import os
 import random
+import re
 import signal
 import sqlite3
 import sys
@@ -169,11 +170,11 @@ class Client:
     # -- search.do (표제어 → target_code)
     def search_word(self, word, method):
         q = word.replace("-", "").strip()      # 표제어의 하이픈은 검색어에서 뺀다
-        hits, start = [], 1
+        hits, page = [], 1                      # search.do 의 start 는 항목 번호가 아니라 페이지 번호다
         while True:
             text = self.call("/api/search.do", {
                 "q": q, "req_type": "xml", "advanced": "y", "target": "1",
-                "method": method, "start": str(start), "num": "100"})
+                "method": method, "start": str(page), "num": "100"})
             root = parse_xml(text)
             check_error(root)
             total = int((root.findtext("total") or "0").strip() or 0)
@@ -185,15 +186,26 @@ class Client:
                         "INSERT OR REPLACE INTO search_hits VALUES(?,?,?,?,?,?)",
                         (int(hit["target_code"]), hit["word"], hit["sup_no"], hit["origin"], hit["pos"], now()))
             self.db.commit()
-            start += 100
-            if start > total or start > 1000 or not root.findall("item"):
+            page += 1
+            if (page - 1) * 100 >= total or page > 1000 or not root.findall("item"):
                 break
         return hits
 
 
+# search.do 응답은 원어 표기 안의 '<일>' 같은 표시를 이스케이프하지 않고 내보낸다(예: <origin><일>Kôchi[高知]縣</origin>).
+# 한글은 XML 이름으로 쓸 수 있어 파서가 이를 태그로 읽다가 실패하고, 그 항목이 들어 있는 페이지는 항상 깨진다(2026-10-13 확인).
+# 응답의 진짜 태그 이름은 모두 ASCII 이므로, '<' 바로 뒤에 ASCII 가 아닌 글자가 오면 본문의 글자로 보고 이스케이프해 다시 읽는다.
+_STRAY_LT = re.compile(r"<(?=[^\x00-\x7f])")
+
+
 def parse_xml(text):
+    text = text.strip()
     try:
-        return ET.fromstring(text.strip())
+        return ET.fromstring(text)
+    except ET.ParseError:
+        pass
+    try:
+        return ET.fromstring(_STRAY_LT.sub("&lt;", text))
     except ET.ParseError:
         raise ApiError("응답이 올바른 XML이 아닙니다")
 
