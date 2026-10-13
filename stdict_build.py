@@ -30,7 +30,7 @@ from urllib.parse import parse_qs, urlparse
 
 import stdict_fetch as sf
 
-SCHEMA_VERSION = "v4"
+SCHEMA_VERSION = "v4.1"        # v4 + pronunciations.pron_plain
 CACHE_DIR = Path.home() / ".cache" / "stdict-db"
 OUT_PATH = sf.DB_PATH.parent / "stdict.sqlite"
 PREV_PATH = sf.DB_PATH.parent / "stdict.prev.sqlite"
@@ -83,7 +83,7 @@ TABLES = {  # 표 이름 -> 열 정의(삽입 순서)
     "entries": "target_code INTEGER PRIMARY KEY, word TEXT NOT NULL, word_plain TEXT NOT NULL, word_key TEXT NOT NULL, sup_no INTEGER, "
                "sup_no_source TEXT, word_unit TEXT, word_type TEXT, original_text TEXT, origin TEXT, allomorph TEXT",
     "origins": "target_code INTEGER NOT NULL, seq INTEGER NOT NULL, original_language TEXT, language_type TEXT",
-    "pronunciations": "target_code INTEGER NOT NULL, seq INTEGER NOT NULL, pronunciation TEXT, pron_norm TEXT",
+    "pronunciations": "target_code INTEGER NOT NULL, seq INTEGER NOT NULL, pronunciation TEXT, pron_norm TEXT, pron_plain TEXT",
     "conjugations": "id INTEGER PRIMARY KEY, target_code INTEGER NOT NULL, seq INTEGER NOT NULL, kind TEXT NOT NULL, form TEXT",
     "conj_pron": "conjugation_id INTEGER NOT NULL, seq INTEGER NOT NULL, pronunciation TEXT",
     "pos_entries": "pos_code INTEGER PRIMARY KEY, target_code INTEGER NOT NULL, seq INTEGER NOT NULL, pos TEXT",
@@ -110,6 +110,7 @@ CREATE INDEX origins_code ON origins(target_code);
 CREATE INDEX origins_lang ON origins(original_language);
 CREATE INDEX pron_code ON pronunciations(target_code);
 CREATE INDEX pron_norm ON pronunciations(pron_norm);
+CREATE INDEX pron_plain ON pronunciations(pron_plain);
 CREATE INDEX conj_code ON conjugations(target_code);
 CREATE INDEX conj_form ON conjugations(form);
 CREATE INDEX conj_pron_id ON conj_pron(conjugation_id);
@@ -200,7 +201,8 @@ def parse_item(item, R, ids):
         R["origins"].append((code, i, tx(o, "original_language"), tx(o, "language_type")))
     for i, p in enumerate(wi.findall("pronunciation_info")):
         pr = tx(p, "pronunciation")
-        R["pronunciations"].append((code, i, pr, pr.replace("ː", ":") if pr else None))
+        pn = pr.replace("ː", ":") if pr else None
+        R["pronunciations"].append((code, i, pr, pn, pn.replace(":", "") if pn else None))
     seq = 0
     for cj in wi.findall("conju_info"):
         for kind, tag, ctag in (("활용", "conjugation_info", "conjugation"), ("준말", "abbreviation_info", "abbreviation")):

@@ -25,6 +25,8 @@ import unicodedata
 import urllib.parse
 from pathlib import Path
 
+import stdict_stem
+
 HERE = Path(__file__).resolve().parent
 DEFAULT_DB = Path(os.environ.get("STDICT_DB") or HERE / "data" / "stdict.sqlite")
 DEFAULT_TIMEOUT = 3.0                  # 한 질의가 이 시간(초)을 넘으면 중단
@@ -169,13 +171,15 @@ class Dictionary:
             "SELECT target_code FROM entries WHERE word_key=? "
             "ORDER BY sup_no IS NULL, sup_no, target_code", (key,))]
         res = {"query": word, "normalized": norm, "total": len(codes), "shown": 0, "entries": [],
-               "pron_groups": self._pron_groups(key) if len(codes) > 1 else [], "base_forms": [], "suggestions": []}
+               "pron_groups": self._pron_groups(key) if len(codes) > 1 else [], "base_forms": [], "inferred": False,
+               "suggestions": []}
         for code in codes[:max_entries]:
             res["entries"].append(self._entry(code, include_examples, include_cited))
         res["shown"] = len(res["entries"])
         if not codes:
             codes, _, notes = self._find_form(norm, 8)
             res["base_forms"] = self._summaries(codes, notes=notes)
+            res["inferred"] = any(n.startswith("규칙으로 추정") for n in notes.values())
             res["suggestions"] = self.suggest(norm)
         return res
 
@@ -282,22 +286,59 @@ class Dictionary:
                       tuple(params) + tuple(order_params) + (limit,))
         return [r[0] for r in rows], total
 
+    def _has_column(self, table, column):
+        """빌드 v4.1 이전 DB 에는 pron_plain 이 없다. DB 파일이 바뀌면(교체) 다시 확인한다."""
+        sig = self._signature()
+        cache = self.__dict__.setdefault("_columns", {})
+        if cache.get("sig") != sig:
+            cache.clear()
+            cache["sig"] = sig
+        if (table, column) not in cache:
+            cache[(table, column)] = any(r[1] == column for r in self.q(f"PRAGMA table_info({table})"))
+        return cache[(table, column)]
+
     def _find_pronunciation(self, norm, limit):
         key = pron_key(norm)
         if ":" in key:                                       # 장음을 지정: 정확히 일치
             where, params = "e.target_code IN (SELECT target_code FROM pronunciations WHERE pron_norm=?)", (key,)
         else:                                                # 장음 기호가 없으면 장단 모두
-            where = ("e.target_code IN (SELECT target_code FROM pronunciations "
-                     "WHERE pron_norm=? OR replace(pron_norm, ':', '')=?)")
-            params = (key, key)
+            col = "pron_plain" if self._has_column("pronunciations", "pron_plain") else "replace(pron_norm, ':', '')"
+            where = f"e.target_code IN (SELECT target_code FROM pronunciations WHERE {col}=?)"
+            params = (key,)
         codes, total = self._page(where, params, limit)
         return codes, total, {}
 
     def _find_hanja(self, norm, limit):
-        where, params = "e.original_text LIKE ? ESCAPE '\\'", (_like(norm),)
+        if len(norm) >= 3:                                   # 3글자 이상은 trigram FTS(original_text 열)로 부분 일치
+            where, params = ("e.target_code IN (SELECT rowid FROM fts_words WHERE fts_words MATCH ?)",
+                             ("original_text:" + _fts_phrase(norm),))
+        else:                                                # 1~2글자는 trigram 으로 못 찾아 전체를 훑는다
+            where, params = "e.original_text LIKE ? ESCAPE '\\'", (_like(norm),)
         codes, total = self._page(where, params, limit, "(e.original_text=?) DESC, length(e.original_text), ",
                                   (norm,))
         return codes, total, {}
+
+    INFER_POS = ("동사", "형용사", "보조 동사", "보조 형용사")
+
+    def infer_base(self, norm, limit=8):
+        """사전에 활용형으로 실리지 않은 규칙 활용형(먹었다·갔다)에서 어미를 떼어 표제어 후보를 찾는다.
+        (코드 목록, {코드: 설명}). 후보 기본형이 동사·형용사 표제어로 실제 있는 것만 돌려준다."""
+        if " " in norm or len(norm) < 2:
+            return [], {}
+        rules = {}
+        for stem, rule in stdict_stem.candidates(norm):
+            rules.setdefault(stem + "다", rule)
+        if not rules:
+            return [], {}
+        marks = ",".join("?" * len(rules))
+        pos = ",".join("?" * len(self.INFER_POS))
+        rows = self.q(f"SELECT e.target_code, e.word_key FROM entries e WHERE e.word_key IN ({marks}) "
+                      f"AND EXISTS (SELECT 1 FROM pos_entries p WHERE p.target_code=e.target_code AND p.pos IN ({pos})) "
+                      f"ORDER BY length(e.word_key) DESC, e.word_key, e.sup_no IS NULL, e.sup_no, e.target_code",
+                      tuple(rules) + self.INFER_POS)
+        codes = [r[0] for r in rows][:limit]
+        notes = {r[0]: "규칙으로 추정: " + rules[r[1]] + f" → 기본형 '{r[1]}'" for r in rows if r[0] in codes}
+        return codes, notes
 
     def _codes_by_form(self, norm, limit):
         where, params = "e.target_code IN (SELECT target_code FROM conjugations WHERE form=?)", (norm,)
@@ -311,6 +352,9 @@ class Dictionary:
             kinds = [r[0] for r in self.q("SELECT DISTINCT kind FROM conjugations WHERE target_code=? AND form=?",
                                           (code, norm))]
             notes[code] = f"{'·'.join(kinds)}형 '{norm}'"
+        if not codes:
+            codes, notes = self.infer_base(norm, limit)
+            total = len(codes) or 0
         return codes, total, notes
 
     def _find_definition(self, norm, limit):
@@ -434,8 +478,11 @@ def format_lookup(res):
     q = res["normalized"]
     if not res["total"]:
         lines.append(f"「{q}」은(는) 표제어에 없습니다.")
+        if res.get("inferred"):
+            lines.append("  사전에 활용형으로 실려 있지는 않지만, 어미를 떼어 규칙으로 추정한 기본형 후보 "
+                         "(불규칙 활용이면 다른 표제어일 수 있음):")
         for b in res["base_forms"]:
-            lines.append("  활용형으로는 있음: " + _hit_line(b, "form"))
+            lines.append("  " + ("추정 기본형: " if res.get("inferred") else "활용형으로는 있음: ") + _hit_line(b, "form"))
         if res["suggestions"]:
             lines.append("  비슷한 표제어: " + ", ".join(res["suggestions"]))
         lines.append(ATTRIBUTION)

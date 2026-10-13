@@ -86,7 +86,8 @@ def lookup_word(word: str, max_entries: int = 12, include_examples: bool = False
     Returns ALL homonyms of the spelling, each with its superscript number, Hanja/original language, pronunciation
     (ː marks a long vowel), part of speech and definitions. When the homonyms are pronounced differently, the result
     starts with a summary that groups them by pronunciation; answer from that summary and the listed entries only. If the word is not an entry but is a conjugated or
-    abbreviated form (e.g. 먹어 -> 먹다), the base word is shown; otherwise similar entries are suggested.
+    abbreviated form (e.g. 먹어 -> 먹다), the base word is shown; for regular conjugated forms not listed in the dictionary
+    (e.g. 갔다, 먹었다) a base-form candidate is shown labeled '규칙으로 추정' (rule-based guess, irregular verbs not covered); otherwise similar entries are suggested.
     Use this for spelling, pronunciation (including long vs short vowels), meaning, Hanja and homonym checks.
     Hyphens and spaces typed by the user are handled; do not add them yourself.
     Args: word = the Korean word or phrase, e.g. "연기"; max_entries = how many homonyms to show (default 12);
@@ -101,7 +102,8 @@ def search_dictionary(query: str, by: Literal["pronunciation", "hanja", "form", 
     by="pronunciation": find words pronounced like the query; write the long vowel mark ː (or a colon :) to match
     only long vowels, e.g. "연ː기"; without it, both long and short matches are returned.
     by="hanja": find words containing the given Hanja, e.g. "演技".
-    by="form": find the base word of a conjugated or abbreviated form listed in the dictionary, e.g. "가계해".
+    by="form": find the base word of a conjugated or abbreviated form listed in the dictionary, e.g. "가계해";
+    regular forms that are not listed (e.g. "갔다") get a rule-based guess labeled '규칙으로 추정' with the rule used.
     by="definition": find words whose definition contains the phrase (2 or more characters; 3 or more is exact).
     For checking a single known word, use lookup_word instead.
     Args: query = the text to search; by = the search kind above; limit = maximum results (default 10)."""
