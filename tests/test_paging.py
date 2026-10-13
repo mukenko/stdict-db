@@ -106,6 +106,20 @@ class ParseXml(unittest.TestCase):
         self.assertEqual(origins, ["<일>Kôchi[高知]縣", "木"])
         self.assertEqual([i.findtext("target_code") for i in root.findall("item")], ["1", "2"])
 
+    def test_unescaped_ampersand_is_recovered(self):
+        root = sf.parse_xml("<channel><item><target_code>7</target_code><origin>R&B</origin></item></channel>")
+        self.assertEqual(root.find("item").findtext("origin"), "R&B")
+
+    def test_known_entities_are_not_double_escaped(self):
+        root = sf.parse_xml("<channel><item><origin>a &amp; b &lt;일&gt; &#38; <일>c</origin></item></channel>")
+        self.assertEqual(root.find("item").findtext("origin"), "a & b <일> & <일>c")
+
+    def test_cdata_is_preserved_when_the_rest_needs_repair(self):
+        link = "https://example.org/view?word_no=1&searchKeywordTo=3"
+        root = sf.parse_xml(f"<channel><item><link><![CDATA[{link}]]></link><origin>R&B <일>x</origin></item></channel>")
+        self.assertEqual(root.find("item").findtext("link"), link)                  # CDATA 안의 & 는 그대로
+        self.assertEqual(root.find("item").findtext("origin"), "R&B <일>x")
+
     def test_valid_xml_is_untouched(self):
         root = sf.parse_xml("<channel><total>1</total><item><origin>&lt;일&gt;x</origin></item></channel>")
         self.assertEqual(root.find("item").findtext("origin"), "<일>x")
