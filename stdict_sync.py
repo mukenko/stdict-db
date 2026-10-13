@@ -35,6 +35,7 @@ import random
 import re
 import signal
 import sys
+import time
 import zlib
 import xml.etree.ElementTree as ET
 from collections import Counter
@@ -51,6 +52,10 @@ PROBE_DEFAULT_LIMIT = sf.DEFAULT_LIMIT + 1000   # 수집이 45,000건까지 쓴 
 PAGE_SIZE = 100
 MAX_PAGE = 1000
 SEARCH_MAX = PAGE_SIZE * MAX_PAGE
+# search.do 는 가끔 오류 표시 없이 total=0 이나 어긋난 페이지(다른 total, 빈 페이지)를 돌려준다. 같은 질의를 다시 보내면 정상이다.
+RETRIES = 3                                     # 어긋난 열거를 처음부터 다시 하는 최대 횟수
+ZERO_RECHECKS = 2                               # total=0 을 확정하기 전에 같은 질의를 다시 보내는 횟수
+RETRY_WAIT = 5.0                                # 재시도 전 대기(초)
 BATCH = 50                                      # 이만큼 모아서 이상 징후를 검사한 뒤 한 번에 반영
 
 SYNC_SCHEMA = """
@@ -262,16 +267,83 @@ def run_probe(args, db, client, today):
         print(f"         예: {', '.join(examples[cat][:6])}")
 
 
+# ---------------------------------------------------------------- 검색 응답 검증 (일시적 이상 응답 대비)
+class SearchInconsistent(sf.ApiError):
+    """페이지마다 total 이 다르거나 페이지 크기가 total 과 맞지 않는 응답. partial 에 읽은 항목을 담는다."""
+
+    def __init__(self, msg, total=0, partial=()):
+        super().__init__(msg)
+        self.total, self.partial = total, list(partial)
+
+
+def first_page(client, **kw):
+    """1페이지를 받는다. total=0 이면 일시적 이상일 수 있어 같은 질의를 몇 번 더 확인한다."""
+    total, items = search(client, page=1, num=PAGE_SIZE, **kw)
+    for _ in range(ZERO_RECHECKS):
+        if total:
+            break
+        time.sleep(RETRY_WAIT)
+        total, items = search(client, page=1, num=PAGE_SIZE, **kw)
+    return total, items
+
+
+def read_pages(client, total, items, **kw):
+    """1페이지(total, items)에 이어 나머지 페이지를 받으며 개수를 검증한다. 어긋나면 SearchInconsistent."""
+    want = min(total, SEARCH_MAX)
+    pages = -(-want // PAGE_SIZE)
+    out, page = [], 1
+    while True:
+        expect = min(PAGE_SIZE, want - (page - 1) * PAGE_SIZE)
+        if len(items) != expect:
+            raise SearchInconsistent(f"{page}페이지 {len(items)}건(기대 {expect}건, total {total})", total, out + items)
+        out += items
+        if page >= pages:
+            break
+        page += 1
+        t, items = search(client, page=page, num=PAGE_SIZE, **kw)
+        if t != total:
+            raise SearchInconsistent(f"{page}페이지가 total {t}를 보고(1페이지는 {total})", total, out)
+    if len({it["target_code"] for it in out}) != len(out):
+        raise SearchInconsistent("같은 코드가 여러 번 나옴", total, out)
+    return out
+
+
+def with_retries(fn):
+    """fn() 이 SearchInconsistent 를 내면 잠시 기다렸다 처음부터 다시 한다. 끝까지 어긋나면 마지막 예외를 낸다."""
+    for attempt in range(RETRIES + 1):
+        try:
+            return fn()
+        except SearchInconsistent:
+            if attempt == RETRIES:
+                raise
+            time.sleep(RETRY_WAIT)
+
+
 # ---------------------------------------------------------------- 변경 코드 찾기 (updates)
 def collect_changed(client, s, e, hits, warns, pos=None):
     """[s, e] 기간에 고친 날짜가 있는 항목을 hits(code -> 항목)에 모은다.
     한 번에 100,000건(1000페이지 x 100건)까지 볼 수 있으므로 보통은 나눌 일이 없지만, 넘으면 날짜 구간을 절반씩 나누고,
-    하루짜리도 넘으면 품사(1~15)로 나눈다. 그래도 넘으면 경고를 남긴다."""
+    하루짜리도 넘으면 품사(1~15)로 나눈다. 그래도 넘으면 경고를 남긴다.
+    일시적 이상 응답(total=0, 어긋난 페이지)은 다시 확인·재시도하고, 끝까지 어긋나면 경고를 남긴다(기준일 갱신 안 함)."""
     q, method, target = ALL_Q
-    total, items = search(client, q, method, target, ymd(s), ymd(e), page=1, num=PAGE_SIZE, pos=pos)
+    kw = dict(q=q, method=method, target=target, update_s=ymd(s), update_e=ymd(e), pos=pos)
+
+    def attempt():
+        total, items = first_page(client, **kw)
+        if total == 0 or total > SEARCH_MAX:
+            return total, None
+        return total, read_pages(client, total, items, **kw)
+
+    try:
+        total, got = with_retries(attempt)
+    except SearchInconsistent as ex:
+        warns.append(f"{s.isoformat()}~{e.isoformat()}{f' 품사 {pos}' if pos else ''}: 검색 응답이 끝까지 어긋남 ({ex})")
+        for it in ex.partial:
+            hits[int(it["target_code"])] = it                  # 읽은 만큼은 갱신 대상에 남긴다
+        return
     if total == 0:
         return
-    if total > SEARCH_MAX:
+    if got is None:                                            # total > SEARCH_MAX
         if s < e:
             mid = s + (e - s) // 2
             collect_changed(client, s, mid, hits, warns)
@@ -282,14 +354,13 @@ def collect_changed(client, s, e, hits, warns, pos=None):
                 collect_changed(client, s, e, hits, warns, pos=p)
             return
         warns.append(f"{s.isoformat()} 품사 {pos}: {total}건 중 앞의 {SEARCH_MAX}건만 확인")
-    pages = -(-min(total, SEARCH_MAX) // PAGE_SIZE)
-    for page in range(1, pages + 1):
-        if page > 1:
-            total, items = search(client, q, method, target, ymd(s), ymd(e), page=page, num=PAGE_SIZE, pos=pos)
-            if not items:
-                break
-        for it in items:
-            hits[int(it["target_code"])] = it
+        try:
+            _, items = first_page(client, **kw)
+            got = with_retries(lambda: read_pages(client, total, items, **kw))
+        except SearchInconsistent as ex:
+            got = ex.partial
+    for it in got:
+        hits[int(it["target_code"])] = it
 
 
 def cmd_updates(args):
@@ -329,6 +400,8 @@ def cmd_updates(args):
         print(f"다음 실행의 기준일을 {until.isoformat()} 로 저장했습니다(겹침 {args.overlap}일).")
     elif completed:
         print("경고가 있어 기준일을 갱신하지 않았습니다. 같은 --since 로 다시 실행하거나 나눠서 실행하세요.")
+        print(f"오늘 호출 {client.used_today()}/{args.limit}")
+        sys.exit(2)                                            # 정기 업데이트가 '미완료 단계'로 알린다
     else:
         print("끝까지 처리하지 못해 기준일을 갱신하지 않았습니다. 같은 명령을 다시 실행하세요.")
     print(f"오늘 호출 {client.used_today()}/{args.limit}")
@@ -683,14 +756,20 @@ def supno_pending(db, groups, known, retry_issues):
 
 
 def supno_search(client, plain):
-    """하이픈을 뺀 표제어를 일치 검색해 모든 동음이의어(하이픈 표제어 포함)를 받는다."""
-    hits, page = [], 1
-    while True:
-        total, items = search(client, plain, "exact", 1, page=page, num=PAGE_SIZE)
-        hits += items
-        page += 1
-        if not items or len(hits) >= total or page > MAX_PAGE:
-            return total, hits
+    """하이픈을 뺀 표제어를 일치 검색해 모든 동음이의어(하이픈 표제어 포함)를 받는다.
+    일시적 이상 응답은 재시도하고, 끝까지 어긋나면 받은 그대로 돌려줘 supno_check 가 이슈로 기록하게 한다."""
+    kw = dict(q=plain, method="exact", target=1)
+
+    def attempt():
+        total, items = first_page(client, **kw)
+        if total == 0:
+            return 0, []
+        return total, read_pages(client, total, items, **kw)
+
+    try:
+        return with_retries(attempt)
+    except SearchInconsistent as ex:
+        return ex.total, ex.partial
 
 
 def supno_check(plain, codes, known, total, hits, all_local=None):
