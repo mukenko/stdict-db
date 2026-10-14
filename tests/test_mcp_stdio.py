@@ -95,6 +95,7 @@ class Protocol(unittest.IsolatedAsyncioTestCase):
             self.assertIn("입력", text(res))
             res = await s.call_tool("search_dictionary", {"query": "식", "by": "definition"})
             self.assertIn("2글자", text(res))
+            self.assertIn("lookup_word", text(res))                  # 대신 쓸 도구를 안내
             res = await s.call_tool("lookup_word", {"word": "풀발"})              # 이후에도 정상
             self.assertIn("[풀빨]", text(res))
 

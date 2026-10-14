@@ -384,7 +384,9 @@ class Dictionary:
 
     def _find_definition(self, norm, limit):
         if len(norm) < 2:
-            raise StdictError("뜻풀이 검색어는 2글자 이상이어야 합니다.")
+            raise StdictError("뜻풀이 검색어는 2글자 이상이어야 합니다. 한 글자는 결과가 너무 많아 검색하지 않습니다. "
+                              "그 글자가 단어라면 lookup_word 로 표제어를 조회하고, 발음·한자·활용형으로 찾으려면 "
+                              "search_dictionary 의 by=pronunciation / hanja / form 을 쓰세요.")
         base = ("FROM senses s JOIN patterns p ON p.comm_pattern_code=s.comm_pattern_code "
                 "JOIN pos_entries pe ON pe.pos_code=p.pos_code JOIN entries e ON e.target_code=pe.target_code WHERE ")
         if len(norm) >= 3:                                   # FTS5 trigram 은 3글자 미만이 안 된다

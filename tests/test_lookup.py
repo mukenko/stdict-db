@@ -222,8 +222,11 @@ class Search(unittest.TestCase):
         self.assertIn("전체 개수를 세지 않음", sl.format_search(res))
 
     def test_definition_needs_two_chars(self):
-        with self.assertRaises(sl.StdictError):
+        with self.assertRaises(sl.StdictError) as cm:
             self.d.search("식", "definition")
+        msg = str(cm.exception)                                  # 대신 쓸 방법을 안내해야 한다
+        for hint in ("2글자", "lookup_word", "pronunciation", "hanja", "form"):
+            self.assertIn(hint, msg)
 
     def test_bad_kind(self):
         with self.assertRaises(sl.StdictError):
