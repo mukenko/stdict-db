@@ -420,12 +420,19 @@ def validate(db, args, n_ok, tally, unknown, bad, partial_keys=frozenset()):
         msg = (f"어깨번호가 비어 있는 중복 그룹 {len(unexplained):,}개(알려진 예외 아님) → `stdict_sync.py supno` 로 보충 필요 "
                f"(sup_no NULL {scalar(db, 'SELECT COUNT(*) FROM entries WHERE sup_no IS NULL'):,}건)")
         (errors if args.require_supno else warns).append(msg)
-    conflict = scalar(db, "SELECT COUNT(*) FROM relations r JOIN entries e ON e.target_code=r.link_code "
-                          "WHERE (r.scope='relation_info' OR r.unit='어휘') AND e.sup_no IS NOT NULL "
-                          "AND substr(r.word,-2) GLOB '[0-9][0-9]' AND substr(r.word,1,length(r.word)-2)=e.word "
-                          "AND CAST(substr(r.word,-2) AS INTEGER)<>e.sup_no")
-    if conflict:
-        errors.append(f"링크의 어깨번호와 배정한 번호가 다른 것 {conflict:,}건")
+    conflicts = db.execute("SELECT e.word_key, e.target_code, CAST(substr(r.word,-2) AS INTEGER), e.sup_no FROM relations r "
+                           "JOIN entries e ON e.target_code=r.link_code "
+                           "WHERE (r.scope='relation_info' OR r.unit='어휘') AND e.sup_no IS NOT NULL "
+                           "AND substr(r.word,-2) GLOB '[0-9][0-9]' AND substr(r.word,1,length(r.word)-2)=e.word "
+                           "AND CAST(substr(r.word,-2) AS INTEGER)<>e.sup_no").fetchall()
+    # supno 가 '링크가 옛 번호(검색이 정확)'로 기록한 그룹의 충돌은 낡은 링크 때문이라 경고로만 둔다(동음이의어가 끼어들어 번호가 밀린 경우)
+    stale = [c for c in conflicts if c[0] in partial_keys]
+    real = [c for c in conflicts if c[0] not in partial_keys]
+    if stale:
+        warns.append(f"링크의 어깨번호가 낡은 것 {len(stale):,}건(검색 번호를 씀, supno_issues 'partial'로 기록된 그룹: "
+                     f"{sorted({c[0] for c in stale})[:5]})")
+    if real:
+        errors.append(f"링크의 어깨번호와 배정한 번호가 다른 것 {len(real):,}건 (예: {[c[:4] for c in real[:3]]})")
     # 6) 링크 정합성
     if not args.limit:
         link_checks(db, errors, warns)

@@ -808,9 +808,16 @@ def supno_check(plain, codes, known, total, hits, all_local=None):
         if len(nz) != len(set(nz)) or (nz and max(nz) > len(local | set(remote))):
             return "sup_no_sequence", f"번호 {sorted(nums)[:12]}"
         note.append("번호 0(번호 없음)이 섞여 있음" if 0 in nums else "번호에 빈 자리가 있음")
-    for c in codes:
-        if c in known and c in remote and known[c] != int(remote[c]["sup_no"]):
-            return "link_conflict", f"{c}: 링크 {known[c]}, 검색 {remote[c]['sup_no']}"
+    conflicts = [(c, known[c], int(remote[c]["sup_no"])) for c in codes
+                 if c in known and c in remote and known[c] != int(remote[c]["sup_no"])]
+    if conflicts:
+        # 동음이의어가 새로 끼어들면 번호가 밀리는데 다른 항목의 링크('채수03')는 한동안 옛 번호를 가리킨다(2026-10-15 채수).
+        # 검색 결과가 로컬 그룹과 코드가 정확히 같고 번호가 깨끗한 1~n이면 낡은 링크로 보고 검색 번호를 저장한다.
+        clean = not note and not only_remote and sorted(nums) == list(range(1, n + 1))
+        if not clean:
+            c, link, found = conflicts[0]
+            return "link_conflict", f"{c}: 링크 {link}, 검색 {found}"
+        note.append("링크가 옛 번호(검색이 정확): " + ", ".join(f"{c} 링크 {a} 검색 {b}" for c, a, b in conflicts[:8]))
     return ("partial", "; ".join(note)) if note else None
 
 
