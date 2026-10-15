@@ -51,6 +51,15 @@ class Protocol(unittest.IsolatedAsyncioTestCase):
             self.assertIn("homonyms", init.instructions)
             self.assertIn("ː", init.instructions)
 
+    async def test_extra_explanation_is_allowed_only_when_labeled(self):
+        """사전 사실은 그대로 인용하게 하되, 사전 밖 설명은 표시하면 덧붙일 수 있다."""
+        async with session() as (s, init):
+            self.assertIn("[사전 외 설명]", init.instructions)
+            self.assertIn("never invent", init.instructions.lower())
+            out = text(await s.call_tool("lookup_word", {"word": "연기"}))
+            self.assertIn("[사전 외 설명]", out.split("\n")[-1])           # 알림에도 같은 표시 방법
+            self.assertNotIn("answer only from the entries", out)         # 예전의 전면 금지 문구는 없다
+
     async def test_two_tools_with_descriptions(self):
         async with session() as (s, _):
             tools = {t.name: t for t in (await s.list_tools()).tools}
@@ -70,7 +79,7 @@ class Protocol(unittest.IsolatedAsyncioTestCase):
             self.assertIn(sl.LONG_NOTE, t)
             self.assertIn(sl.ATTRIBUTION, t)
             self.assertTrue(t.rstrip().endswith("]"))                         # 끝의 모델용 알림
-            self.assertIn("Do not add example sentences", t)
+            self.assertIn("never invent entries, readings, other-language words or example sentences", t)
 
     async def test_search_by_pronunciation(self):
         async with session() as (s, _):

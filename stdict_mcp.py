@@ -42,18 +42,21 @@ INSTRUCTIONS = (
     "Hanja/original language and meanings instead of answering from memory. "
     "One spelling can have several homonyms (shown with superscript numbers, e.g. 연기¹ 연기²); read ALL of them and "
     "choose by context, and do not mix up their pronunciations (e.g. 연ː기 with a long vowel vs 연기). "
-    "Base your answer ONLY on the tool output: do not add entries, readings, other-language words or examples from "
-    "memory, copy pronunciations exactly as shown (keep ː), and when the output has a pronunciation summary, use it "
-    "to separate long-vowel words from short-vowel ones. "
+    "Quote dictionary facts exactly from the tool output and never invent or \"recall\" them: entries and homonym "
+    "numbers, readings and pronunciations (copy them exactly as shown, keeping ː), Hanja/original language, "
+    "definitions, examples and other-language words. When the output has a pronunciation summary, use it to "
+    "separate long-vowel words from short-vowel ones. You may add general explanation, background or advice beyond "
+    "the entries, but put it in a separate part labeled \"[사전 외 설명]\" so the user can tell it did not come "
+    "from the dictionary. "
     "If a tool says a word is not an entry, say so; do not invent dictionary content. "
     "Answer in the user's language (Korean unless the user writes otherwise) and mention that the source is the "
     "Standard Korean Language Dictionary."
 )
 
 # 모든 조회 결과 끝에 붙이는 알림(personal-memory 의 NOTICE 와 같은 방식). 모델에 대한 부탁이며 강제는 아니다.
-NOTICE = ("[Note to assistant: answer only from the entries above. Do not add example sentences, other words, "
-          "other-language words or readings that are not listed; quote pronunciations exactly (keep ː); "
-          "state that the source is the Standard Korean Language Dictionary.]")
+NOTICE = ("[Note to assistant: quote the entries above exactly and never invent entries, readings, other-language "
+          "words or example sentences; keep ː as shown. General explanation beyond the entries is welcome only in a "
+          "separate part labeled \"[사전 외 설명]\". State that the source is the Standard Korean Language Dictionary.]")
 
 _dictionary = None
 
