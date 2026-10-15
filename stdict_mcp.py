@@ -42,21 +42,48 @@ INSTRUCTIONS = (
     "Hanja/original language and meanings instead of answering from memory. "
     "One spelling can have several homonyms (shown with superscript numbers, e.g. 연기¹ 연기²); read ALL of them and "
     "choose by context, and do not mix up their pronunciations (e.g. 연ː기 with a long vowel vs 연기). "
-    "Quote dictionary facts exactly from the tool output and never invent or \"recall\" them: entries and homonym "
-    "numbers, readings and pronunciations (copy them exactly as shown, keeping ː), Hanja/original language, "
-    "definitions, examples and other-language words. When the output has a pronunciation summary, use it to "
-    "separate long-vowel words from short-vowel ones. You may add general explanation, background or advice beyond "
-    "the entries, but put it in a separate part labeled \"[사전 외 설명]\" so the user can tell it did not come "
-    "from the dictionary. "
+    "Keep three tiers of your answer clearly apart. "
+    "(1) Dictionary facts: quote them exactly from the tool output and never invent or \"recall\" them: entries and "
+    "homonym numbers, readings and pronunciations (copy them exactly as shown, keeping ː), Hanja/original language, "
+    "definitions, examples and other-language words. Never attach glosses, classifications or usage registers "
+    "(구어, 문어, 옛말, Hanja readings) to a word unless the tool output states them. "
+    "(2) \"(추론)\": your own comparison or judgement based on the listed entries, e.g. that two entries have "
+    "identical definitions. "
+    "(3) \"[사전 외 설명]\": general explanation, background or advice that is not based on the tool output, in a "
+    "separate part. "
+    "Match your research effort to the question and keep the user in control of how long it takes. A simple check "
+    "(spelling, pronunciation, meaning) needs no extra lookups. When asked for synonyms or similar words, first read "
+    "the 동의어/비슷한말/참고 어휘 notes of the entry and report what the dictionary lists. If it lists none, say so "
+    "and offer, in one line, to search wider (definition searches with different key phrases, a Hanja search for "
+    "Sino-Korean words); do not start that search yet. When the user agrees, or asks from the start for a broad or "
+    "thorough search (e.g. \"더 찾아줘\", \"자세히\", \"비슷한 말을 모두\"), do a bounded search of about 3 to 4 extra "
+    "tool calls: one or two definition searches with different key phrases taken from the definition, one Hanja "
+    "search if the word is Sino-Korean, and lookups of the two or three most promising candidates (even ones you "
+    "think of yourself) to verify them against the dictionary. Present such findings as words whose definitions "
+    "overlap, not as dictionary-listed synonyms, and mark your own comparison as \"(추론)\"; then stop and say what you "
+    "did not cover. Go wider only when the user asks. "
+    "When the output has a pronunciation summary, use it to separate long-vowel words from short-vowel ones. "
     "If a tool says a word is not an entry, say so; do not invent dictionary content. "
     "Answer in the user's language (Korean unless the user writes otherwise) and mention that the source is the "
     "Standard Korean Language Dictionary."
 )
 
 # 모든 조회 결과 끝에 붙이는 알림(personal-memory 의 NOTICE 와 같은 방식). 모델에 대한 부탁이며 강제는 아니다.
-NOTICE = ("[Note to assistant: quote the entries above exactly and never invent entries, readings, other-language "
-          "words or example sentences; keep ː as shown. General explanation beyond the entries is welcome only in a "
-          "separate part labeled \"[사전 외 설명]\". State that the source is the Standard Korean Language Dictionary.]")
+# 인용·표시 방법만 담는다. 탐색 횟수 같은 행동 지시는 도구 결과 안에 넣지 않는다(Claude 가 프롬프트 주입으로 보고 따르지 않고
+# 매번 사용자에게 알린다, 2026-10-15). 그런 기준은 서버 지침(INSTRUCTIONS)과 도구 설명에만 둔다.
+# 서버 지침을 읽는 클라이언트(Claude 등)에는 환경변수 STDICT_MCP_NOTICE=0 으로 알림을 끌 수 있다.
+NOTICE = ("[Note to assistant: quote dictionary facts exactly and never invent them or attach labels, glosses or "
+          "registers the output does not state; keep ː as shown. Mark your own judgement as \"(추론)\" and anything "
+          "beyond the tool output as \"[사전 외 설명]\". State that the source is the Standard Korean Language "
+          "Dictionary.]")
+
+
+def _notice_tail():
+    """결과 끝에 붙일 알림(줄바꿈 포함). STDICT_MCP_NOTICE 가 0/off/false/no 면 붙이지 않는다."""
+    if os.environ.get("STDICT_MCP_NOTICE", "1").strip().lower() in ("0", "off", "false", "no"):
+        return ""
+    return "\n" + NOTICE
+
 
 _dictionary = None
 
@@ -88,14 +115,14 @@ def lookup_word(word: str, max_entries: int = 12, include_examples: bool = False
     """Look up a Korean word in the Standard Korean Language Dictionary (표준국어대사전).
     Returns ALL homonyms of the spelling, each with its superscript number, Hanja/original language, pronunciation
     (ː marks a long vowel), part of speech and definitions. When the homonyms are pronounced differently, the result
-    starts with a summary that groups them by pronunciation; answer from that summary and the listed entries only. If the word is not an entry but is a conjugated or
+    starts with a summary that groups them by pronunciation; use that summary and the listed entries for the facts. If the word is not an entry but is a conjugated or
     abbreviated form (e.g. 먹어 -> 먹다), the base word is shown; for regular conjugated forms not listed in the dictionary
     (e.g. 갔다, 먹었다) a base-form candidate is shown labeled '규칙으로 추정' (rule-based guess; irregular verbs only when the dictionary lists an altered stem); otherwise similar entries are suggested.
     Use this for spelling, pronunciation (including long vs short vowels), meaning, Hanja and homonym checks.
     Hyphens and spaces typed by the user are handled; do not add them yourself.
     Args: word = the Korean word or phrase, e.g. "연기"; max_entries = how many homonyms to show (default 12);
     include_examples = also show usage examples that have no cited source."""
-    return sl.format_lookup(_dict().lookup(word, max_entries, include_examples)) + "\n" + NOTICE
+    return sl.format_lookup(_dict().lookup(word, max_entries, include_examples)) + _notice_tail()
 
 
 @_safe
@@ -108,9 +135,11 @@ def search_dictionary(query: str, by: Literal["pronunciation", "hanja", "form", 
     by="form": find the base word of a conjugated or abbreviated form listed in the dictionary, e.g. "가계해";
     regular forms that are not listed (e.g. "갔다") get a rule-based guess labeled '규칙으로 추정' with the rule used.
     by="definition": find words whose definition contains the phrase (2 or more characters; 3 or more is exact).
+    To find similar words, vary the query: use key phrases taken from the definition (a different phrase can reveal
+    different words) and, for Sino-Korean words, a Hanja search; a few calls are enough.
     For checking a single known word, use lookup_word instead.
     Args: query = the text to search; by = the search kind above; limit = maximum results (default 10)."""
-    return sl.format_search(_dict().search(query, by, limit)) + "\n" + NOTICE
+    return sl.format_search(_dict().search(query, by, limit)) + _notice_tail()
 
 
 TOOLS = (lookup_word, search_dictionary)

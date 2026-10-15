@@ -33,9 +33,9 @@ def text(res):
 
 
 @contextlib.asynccontextmanager
-async def session():
+async def session(env=None):
     """테스트마다 서버를 띄운다. anyio 취소 범위는 같은 태스크에서 열고 닫아야 하므로 setUp/tearDown 으로 나누지 않는다."""
-    params = StdioServerParameters(command=sys.executable, args=[SERVER])
+    params = StdioServerParameters(command=sys.executable, args=[SERVER], env={**os.environ, **(env or {})})
     with open(os.devnull, "w") as err:
         async with stdio_client(params, errlog=err) as (r, w):
             async with ClientSession(r, w) as s:
@@ -60,6 +60,44 @@ class Protocol(unittest.IsolatedAsyncioTestCase):
             self.assertIn("[사전 외 설명]", out.split("\n")[-1])           # 알림에도 같은 표시 방법
             self.assertNotIn("answer only from the entries", out)         # 예전의 전면 금지 문구는 없다
 
+    async def test_three_tiers_and_proportional_research_guidance(self):
+        """사실 / (추론) / [사전 외 설명] 세 층을 나누고, 탐색은 질문에 비례하게(단순 조회는 추가 없음, 동의어가 있으면 멈춤, 없으면 3~4회)."""
+        async with session() as (s, init):
+            ins = init.instructions
+            for needle in ("(추론)", "[사전 외 설명]", "never invent", "bounded", "3 to 4", "동의어", "stop",
+                           "no extra lookups", "offer", "do not start that search yet", "더 찾아줘"):
+                self.assertIn(needle, ins, needle)
+            self.assertNotIn("without asking permission", ins)               # 먼저 제안하고 동의하면 탐색한다(2026-10-15)
+            self.assertIn("definitions overlap", ins)                        # 뜻풀이가 겹치는 말이지 사전 등재 동의어가 아니라고 밝힌다
+            self.assertIn("(구어, 문어, 옛말", ins)                         # 도구 결과에 없는 분류·훈음을 붙이지 말 것
+            tools = {t.name: t for t in (await s.list_tools()).tools}
+            self.assertIn("key phrases", tools["search_dictionary"].description)
+            self.assertNotIn("listed entries only", tools["lookup_word"].description)   # 예전의 경직된 표현
+            notice = text(await s.call_tool("lookup_word", {"word": "연기"})).split("\n")[-1]
+            for needle in ("(추론)", "[사전 외 설명]"):
+                self.assertIn(needle, notice, needle)
+
+    async def test_notice_has_no_process_directives(self):
+        """도구 결과 안에 도구 호출 횟수 같은 행동 지시를 넣으면 Claude 가 프롬프트 주입으로 보고 따르지 않는다(2026-10-15).
+        탐색 기준은 서버 지침·도구 설명에만 두고, 결과 끝 알림은 인용·표시 방법만 담는다."""
+        async with session() as (s, _):
+            for call in (("lookup_word", {"word": "연기"}), ("search_dictionary", {"query": "연기", "by": "pronunciation"})):
+                notice = text(await s.call_tool(*call)).split("\n")[-1]
+                self.assertTrue(notice.startswith("[Note to assistant"))
+                for forbidden in ("extra lookups", "3-4", "extra calls", "proportionate", "stop once", "search wider"):
+                    self.assertNotIn(forbidden, notice, forbidden)
+
+    async def test_notice_can_be_switched_off(self):
+        """Claude 처럼 서버 지침을 읽는 클라이언트는 알림 없이도 되므로 환경변수로 끈다."""
+        for value in ("0", "off", "false"):
+            async with session(env={"STDICT_MCP_NOTICE": value}) as (s, init):
+                out = text(await s.call_tool("lookup_word", {"word": "연기"}))
+                self.assertNotIn("Note to assistant", out, value)
+                self.assertTrue(out.rstrip().splitlines()[-1].startswith("출처:"), value)   # 출처 줄은 그대로
+                self.assertIn("(추론)", init.instructions)                                 # 지침은 그대로
+        async with session(env={"STDICT_MCP_NOTICE": "1"}) as (s, _):
+            self.assertIn("Note to assistant", text(await s.call_tool("lookup_word", {"word": "연기"})))
+
     async def test_two_tools_with_descriptions(self):
         async with session() as (s, _):
             tools = {t.name: t for t in (await s.list_tools()).tools}
@@ -79,7 +117,7 @@ class Protocol(unittest.IsolatedAsyncioTestCase):
             self.assertIn(sl.LONG_NOTE, t)
             self.assertIn(sl.ATTRIBUTION, t)
             self.assertTrue(t.rstrip().endswith("]"))                         # 끝의 모델용 알림
-            self.assertIn("never invent entries, readings, other-language words or example sentences", t)
+            self.assertIn("never invent them", t)
 
     async def test_search_by_pronunciation(self):
         async with session() as (s, _):
