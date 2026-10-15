@@ -120,6 +120,9 @@ def lookup_word(word: str, max_entries: int = 12, include_examples: bool = False
     (e.g. 갔다, 먹었다) a base-form candidate is shown labeled '규칙으로 추정' (rule-based guess; irregular verbs only when the dictionary lists an altered stem); otherwise similar entries are suggested.
     Use this for spelling, pronunciation (including long vs short vowels), meaning, Hanja and homonym checks.
     Hyphens and spaces typed by the user are handled; do not add them yourself.
+    Anything that explains WHY or HOW beyond what this tool returns (for example the sound-change rule behind a
+    pronunciation such as 비음화, spelling rules, usage advice) is not dictionary content: put it in a separate part
+    labeled "[사전 외 설명]". End the answer with the source line.
     Args: word = the Korean word or phrase, e.g. "연기"; max_entries = how many homonyms to show (default 12);
     include_examples = also show usage examples that have no cited source."""
     return sl.format_lookup(_dict().lookup(word, max_entries, include_examples)) + _notice_tail()
@@ -138,6 +141,8 @@ def search_dictionary(query: str, by: Literal["pronunciation", "hanja", "form", 
     To find similar words, vary the query: use key phrases taken from the definition (a different phrase can reveal
     different words) and, for Sino-Korean words, a Hanja search; a few calls are enough.
     For checking a single known word, use lookup_word instead.
+    Explanations beyond the returned entries belong in a separate part labeled "[사전 외 설명]"; end the answer
+    with the source line.
     Args: query = the text to search; by = the search kind above; limit = maximum results (default 10)."""
     return sl.format_search(_dict().search(query, by, limit)) + _notice_tail()
 

@@ -73,6 +73,11 @@ class Protocol(unittest.IsolatedAsyncioTestCase):
             tools = {t.name: t for t in (await s.list_tools()).tools}
             self.assertIn("key phrases", tools["search_dictionary"].description)
             self.assertNotIn("listed entries only", tools["lookup_word"].description)   # 예전의 경직된 표현
+            for name in ("lookup_word", "search_dictionary"):                       # 도구 설명에도 표시 규칙과 전형적인 예
+                d = tools[name].description
+                self.assertIn("[사전 외 설명]", d, name)
+                self.assertIn("source line", d, name)
+            self.assertIn("sound-change rule", tools["lookup_word"].description)    # 발음 질문에서 흔한 사전 밖 설명
             notice = text(await s.call_tool("lookup_word", {"word": "연기"})).split("\n")[-1]
             for needle in ("(추론)", "[사전 외 설명]"):
                 self.assertIn(needle, notice, needle)
