@@ -160,9 +160,10 @@ class Dictionary:
         return {r["key"]: r["value"] for r in self.q("SELECT key, value FROM meta")}
 
     # -- 표제어 조회
-    def lookup(self, word, max_entries=12, include_examples=False, include_cited=False):
-        """표제어(하이픈·^ 무시)가 같은 항목(동음이의어)을 전부 찾는다. 없으면 활용형·비슷한 표제어를 제안한다."""
-        max_entries = max(1, min(int(max_entries), 50))
+    def lookup(self, word, max_entries=12, include_examples=False, include_cited=False, full=False):
+        """표제어(하이픈·^ 무시)가 같은 항목(동음이의어)을 전부 찾는다. 없으면 활용형·비슷한 표제어를 제안한다.
+        full=True 는 화면(원본 보기)용: 동음이의어·뜻·용례·관련어 개수 제한을 두지 않는다."""
+        max_entries = 10000 if full else max(1, min(int(max_entries), 50))
         norm = normalize(word)
         if not norm:
             raise StdictError("조회할 단어를 입력해 주세요.")
@@ -174,7 +175,7 @@ class Dictionary:
                "pron_groups": self._pron_groups(key) if len(codes) > 1 else [], "base_forms": [], "inferred": False,
                "suggestions": []}
         for code in codes[:max_entries]:
-            res["entries"].append(self._entry(code, include_examples, include_cited))
+            res["entries"].append(self._entry(code, include_examples, include_cited, full=full))
         res["shown"] = len(res["entries"])
         if not codes:
             codes, _, notes = self._find_form(norm, 8)
@@ -204,7 +205,13 @@ class Dictionary:
         out.sort(key=lambda g: "ː" not in g["pronunciation"])        # 장음 묶음을 먼저(sort 는 안정 정렬)
         return out
 
-    def _entry(self, code, include_examples, include_cited, max_senses=8, max_rel=6):
+    def entry(self, code, include_examples=False, include_cited=False, full=False):
+        """항목 하나(동음이의어 하나)를 읽는다. full=True 는 개수 제한이 없다."""
+        return self._entry(code, include_examples, include_cited, full=full)
+
+    def _entry(self, code, include_examples, include_cited, max_senses=8, max_rel=6, full=False):
+        if full:
+            max_senses = max_rel = 10 ** 6
         e = self.q("SELECT * FROM entries WHERE target_code=?", (code,))[0]
         out = {
             "target_code": code, "word": e["word_plain"], "headword": e["word"], "sup_no": e["sup_no"],
@@ -238,11 +245,11 @@ class Dictionary:
                     if len(pos["senses"]) >= max_senses:
                         pos["more_senses"] += 1
                         continue
-                    pos["senses"].append(self._sense(s, include_examples, include_cited, max_rel))
+                    pos["senses"].append(self._sense(s, include_examples, include_cited, max_rel, full))
             out["pos"].append(pos)
         return out
 
-    def _sense(self, s, include_examples, include_cited, max_rel):
+    def _sense(self, s, include_examples, include_cited, max_rel, full=False):
         sc = s["sense_code"]
         sense = {
             "code": sc, "type": s["type"], "definition": s["definition"], "scientific_name": s["scientific_name"],
@@ -253,7 +260,7 @@ class Dictionary:
         if include_examples:
             where = "" if include_cited else " AND source IS NULL"       # 출전 있는 용례는 원저작자 권리
             sense["examples"] = [r[0] for r in self.q(
-                f"SELECT example FROM examples WHERE sense_code=?{where} ORDER BY seq LIMIT 3", (sc,)) if r[0]]
+                f"SELECT example FROM examples WHERE sense_code=?{where} ORDER BY seq LIMIT ?", (sc, -1 if full else 3)) if r[0]]
         return sense
 
     def _relations(self, where, params, max_rel):
@@ -268,6 +275,7 @@ class Dictionary:
 
     # -- 역검색
     def search(self, query, by, limit=10):
+        """역검색. 결과의 hits 는 요약이며, 항목 전체는 entry(코드)로 읽는다."""
         if by not in SEARCH_KINDS:
             raise StdictError(f"by 는 {', '.join(SEARCH_KINDS)} 중 하나여야 합니다.")
         limit = max(1, min(int(limit), 50))

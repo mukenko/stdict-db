@@ -19,6 +19,7 @@ LLM이 기억이 아니라 사전을 보고 표기·발음·뜻·한자를 확�
 | `stdict_lookup.py` | 조회 코어(표준 라이브러리만, 읽기 전용) + CLI |
 | `stdict_stem.py` | 규칙 활용형에서 어간 후보를 만드는 순수 함수(조회가 사전에서 확인) |
 | `stdict_mcp.py` | MCP 서버(stdio, 선택적으로 Streamable HTTP) |
+| `stdict_view.py`, `stdict_page.py` | '원본 보기' 링크가 여는 이 컴퓨터 전용 작은 웹 서버와 문서형 화면 |
 | `docs/` | 국립국어원 오픈 API 명세 사본 |
 
 ## 준비
@@ -70,12 +71,22 @@ python3 stdict_lookup.py 연:기 --by pronunciation   # 발음으로 찾기(ː �
   Bearer 토큰이 필수입니다(`~/.config/stdict-mcp/token`, 권한 600). 외부 노출은 프록시(예: `tailscale serve`)가 맡고,
   접속에 쓰는 이름은 환경변수 `STDICT_MCP_HOSTS`에 넣습니다.
 
+#### 원본 보기 링크
+
+표제어를 찾은 조회 결과 끝에는 `원본 보기: http://127.0.0.1:포트/v/…` 줄이 붙고(출처 줄 바로 앞), 모델이 이것을 답변 끝에 `[원본 보기](URL)` 링크로 적습니다.
+누르면 이 맥의 MCP 서버가 127.0.0.1에만 여는 작은 웹 서버가 조회용 DB에서 읽어 문서형 화면으로 보여 줍니다(채팅 결과가 줄여져 있어도 동음이의어·뜻·용례를 전부).
+항목마다 오른쪽 위의 "표준국어대사전 ↗" 버튼이 누리집의 그 항목 하나를 새 창으로 엽니다.
+
+- 링크는 **그 MCP 서버가 살아 있는 동안만** 열립니다(Claude 앱을 끄면 이전 대화의 링크는 열리지 않습니다).
+- 원격(`--http`) 서버에서는 링크 줄이 붙지 않습니다(그 서버의 127.0.0.1은 내 컴퓨터가 아닙니다). 로컬에서도 끄려면 환경변수 `STDICT_VIEW_LINK=0`.
+- 서버를 못 띄워도 조회 결과는 그대로 돌려줍니다(링크 줄만 없습니다).
+
 ## 테스트
 
 조회용 DB를 빌드한 뒤 실행합니다(DB는 저장소에 없습니다).
 ```
 python3 -m unittest tests.test_lookup
-.venv/bin/python -m unittest tests.test_mcp_stdio tests.test_mcp_http
+.venv/bin/python -m unittest tests.test_mcp_stdio tests.test_mcp_http tests.test_view
 ```
 
 ## 데이터와 저작권

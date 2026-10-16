@@ -103,6 +103,31 @@ class Protocol(unittest.IsolatedAsyncioTestCase):
         async with session(env={"STDICT_MCP_NOTICE": "1"}) as (s, _):
             self.assertIn("Note to assistant", text(await s.call_tool("lookup_word", {"word": "연기"})))
 
+    async def test_result_link_opens_the_page(self):
+        """결과 끝의 '원본 보기:' 링크는 그 MCP 프로세스가 살아 있는 동안 열린다(출처 줄 바로 앞, 지침에 링크 규칙)."""
+        import re
+        import urllib.request
+        async with session() as (s, init):
+            self.assertIn("원본 보기:", init.instructions)
+            out = text(await s.call_tool("lookup_word", {"word": "연기", "max_entries": 2}))
+            lines = out.split("\n")
+            self.assertTrue(lines[-3].startswith("원본 보기: http://127.0.0.1:"))
+            self.assertEqual(lines[-2], sl.ATTRIBUTION)
+            url = lines[-3].split(" ", 2)[2]
+            self.assertTrue(re.match(r"^http://127\.0\.0\.1:\d+/v/[0-9a-f]{32}$", url))
+            with urllib.request.urlopen(url, timeout=5) as r:
+                page = r.read().decode("utf-8")
+            self.assertEqual(r.status, 200)
+            self.assertEqual(page.count("<article"), 12)              # 채팅은 2개, 화면은 전부
+            miss = text(await s.call_tool("lookup_word", {"word": "가나다라마바사없는말"}))
+            self.assertNotIn("원본 보기", miss)
+
+    async def test_link_can_be_switched_off(self):
+        async with session(env={"STDICT_VIEW_LINK": "0"}) as (s, _):
+            out = text(await s.call_tool("lookup_word", {"word": "연기"}))
+            self.assertNotIn("원본 보기", out)
+            self.assertIn(sl.ATTRIBUTION, out)
+
     async def test_two_tools_with_descriptions(self):
         async with session() as (s, _):
             tools = {t.name: t for t in (await s.list_tools()).tools}

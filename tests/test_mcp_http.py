@@ -186,6 +186,21 @@ class Running(unittest.IsolatedAsyncioTestCase):
                     res = await s.call_tool("search_dictionary", {"query": "演技", "by": "hanja"})
                     self.assertIn("연ː기", "".join(c.text for c in res.content))
 
+    async def test_remote_server_has_no_view_link(self):
+        """--http(원격) 서버의 127.0.0.1 은 사용자 컴퓨터가 아니므로 링크 줄 없이 평소 결과를 돌려준다."""
+        client = httpx.AsyncClient(headers={"Authorization": f"Bearer {TOKEN}"})
+        async with client:
+            async with streamable_http_client(self.url, http_client=client) as (r, w, *_):
+                async with ClientSession(r, w) as s:
+                    await s.initialize()
+                    for call in (("lookup_word", {"word": "연기"}), ("search_dictionary", {"query": "演技", "by": "hanja"})):
+                        res = await s.call_tool(*call)
+                        t = "".join(c.text for c in res.content)
+                        self.assertFalse(res.is_error)
+                        self.assertNotIn("원본 보기", t)
+                        self.assertIn(sl.ATTRIBUTION, t)
+                        self.assertTrue(t.rstrip().endswith("]"))      # 끝의 알림은 그대로
+
     async def test_concurrent_sessions_and_slow_search_does_not_block(self):
         """느린 검색(전체 훑기)이 돌아가는 동안에도 가벼운 조회가 막히지 않아야 한다."""
         async def one(i):

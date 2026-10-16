@@ -30,10 +30,12 @@ from pathlib import Path
 from typing import Literal
 
 import stdict_lookup as sl
+import stdict_view as view
 
 SERVER_NAME = "stdict"
 HTTP_HOST = "127.0.0.1"                 # 바인드 주소는 고정한다(외부에 직접 열지 않는다)
 HTTP_DEFAULT_PORT = 8766
+HTTP_MODE = False                       # --http 로 띄우면 True(원격 서버는 사용자 화면에서 링크를 열 수 없다)
 TOKEN_FILE = Path(os.environ.get("STDICT_MCP_TOKEN_FILE") or Path.home() / ".config" / "stdict-mcp" / "token")
 
 INSTRUCTIONS = (
@@ -64,6 +66,8 @@ INSTRUCTIONS = (
     "did not cover. Go wider only when the user asks. "
     "When the output has a pronunciation summary, use it to separate long-vowel words from short-vowel ones. "
     "If a tool says a word is not an entry, say so; do not invent dictionary content. "
+    "When a tool result contains a line starting with \"원본 보기:\" followed by a link, end your answer with that link "
+    "as a Markdown link ([원본 보기](URL)). "
     "Answer in the user's language (Korean unless the user writes otherwise) and mention that the source is the "
     "Standard Korean Language Dictionary."
 )
@@ -83,6 +87,27 @@ def _notice_tail():
     if os.environ.get("STDICT_MCP_NOTICE", "1").strip().lower() in ("0", "off", "false", "no"):
         return ""
     return "\n" + NOTICE
+
+
+def _view_link_enabled():
+    """이 컴퓨터의 로컬 서버일 때만 링크를 만든다(원격 서버의 127.0.0.1 은 사용자 컴퓨터가 아니다). STDICT_VIEW_LINK=0 이면 끈다."""
+    return not HTTP_MODE and os.environ.get("STDICT_VIEW_LINK", "1").strip().lower() not in ("0", "off", "false", "no")
+
+
+def _with_footer(text, label="", spec=None, found=True):
+    """결과의 출처 줄(sl.ATTRIBUTION, 맨 끝) 앞에 (로컬 서버이고 찾았으면) '원본 보기:' 줄을 끼운다: 링크 줄 → 출처 줄 순서.
+    링크 줄은 지시가 아니라 주소만 담은 사실이다. 링크를 적는 규칙은 서버 지침·도구 설명에 둔다(도구 결과 안의 지시는 Claude 가
+    주입으로 본다). spec 은 링크 서버가 클릭할 때 다시 그릴 검색 조건이다."""
+    if spec is None or not found or not _view_link_enabled():
+        return text
+    try:
+        line = f"원본 보기: {view.get_server().add_query(label or 'result', **spec)}"
+    except Exception:  # noqa: BLE001  서버를 못 띄워도 조회는 돌려준다
+        return text
+    body, sep, tail = text.rpartition("\n")
+    if sep and tail == sl.ATTRIBUTION:
+        return f"{body}\n{line}\n{tail}"
+    return f"{text}\n{line}"
 
 
 _dictionary = None
@@ -123,9 +148,13 @@ def lookup_word(word: str, max_entries: int = 12, include_examples: bool = False
     Anything that explains WHY or HOW beyond what this tool returns (for example the sound-change rule behind a
     pronunciation such as 비음화, spelling rules, usage advice) is not dictionary content: put it in a separate part
     labeled "[사전 외 설명]". End the answer with the source line.
+    If the result has a line starting with "원본 보기:", it is a link to a page that shows the entries in full from the
+    local database; end your answer with that link as a Markdown link ([원본 보기](URL)).
     Args: word = the Korean word or phrase, e.g. "연기"; max_entries = how many homonyms to show (default 12);
     include_examples = also show usage examples that have no cited source."""
-    return sl.format_lookup(_dict().lookup(word, max_entries, include_examples)) + _notice_tail()
+    res = _dict().lookup(word, max_entries, include_examples)
+    spec = {"kind": "lookup", "q": word, "max_entries": max_entries, "examples": bool(include_examples)}
+    return _with_footer(sl.format_lookup(res), word, spec, bool(res["total"])) + _notice_tail()
 
 
 @_safe
@@ -143,8 +172,12 @@ def search_dictionary(query: str, by: Literal["pronunciation", "hanja", "form", 
     For checking a single known word, use lookup_word instead.
     Explanations beyond the returned entries belong in a separate part labeled "[사전 외 설명]"; end the answer
     with the source line.
+    If the result has a line starting with "원본 보기:", it is a link to a page that shows the found entries in full from
+    the local database; end your answer with that link as a Markdown link ([원본 보기](URL)).
     Args: query = the text to search; by = the search kind above; limit = maximum results (default 10)."""
-    return sl.format_search(_dict().search(query, by, limit)) + _notice_tail()
+    res = _dict().search(query, by, limit)
+    spec = {"kind": "search", "q": query, "by": by, "limit": limit}
+    return _with_footer(sl.format_search(res), query, spec, bool(res["hits"])) + _notice_tail()
 
 
 TOOLS = (lookup_word, search_dictionary)
@@ -238,6 +271,8 @@ def main():
     if args.port is not None and not args.http:
         ap.error("--port 는 --http 와 함께 쓰세요.")
     port = args.port or HTTP_DEFAULT_PORT
+    global HTTP_MODE
+    HTTP_MODE = bool(args.http)
     try:
         from mcp.server.mcpserver import MCPServer as FastMCP    # mcp 2.x (FastMCP 의 새 이름)
     except ImportError:
