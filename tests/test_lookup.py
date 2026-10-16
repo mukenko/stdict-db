@@ -146,12 +146,10 @@ class Lookup(unittest.TestCase):
         text = sl.format_lookup(self.d.lookup("가", max_entries=12))
         self.assertLess(len(text), 20000)
 
-    def test_cited_examples_excluded_by_default(self):
-        res = self.d.lookup("나무", max_entries=10, include_examples=True)
-        shown = [ex for e in res["entries"] for p in e["pos"] for s in p["senses"] for ex in s["examples"]]
-        self.assertTrue(shown)
-        cited = {r[0] for r in self.d.q("SELECT example FROM examples WHERE source IS NOT NULL")}
-        self.assertFalse(set(shown) & cited)
+    def test_cited_examples_are_included_with_their_source(self):
+        text = sl.format_lookup(self.d.lookup("제작하다", include_examples=True))
+        self.assertIn("용례: 성인의 글 아닌 언문 따위를 제작하는 것은 아무리 왕명이라도 거절할 것이다. ≪김동인, 대수양≫", text)
+        self.assertIn("용례: 사람은 도구를 제작하고 사용할 줄 아는 동물이다.\n", text)   # 출전 없는 용례는 그대로(채팅은 뜻마다 3개까지)
 
     def test_no_examples_by_default(self):
         res = self.d.lookup("나무", max_entries=5)

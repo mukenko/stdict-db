@@ -5,7 +5,7 @@ stdict_view.py 의 링크 서버가 '원본 보기'를 열 때 쓴다. 조회 �
 
   - 맨 위: 발음별 요약(동음이의어가 발음이 둘 이상일 때), 동음이의어가 여럿이면 바로가기 목차.
   - 항목마다: 표제어+어깨번호, 원어, 발음, 단어/구·고유어/한자어, 오른쪽 위 "표준국어대사전 ↗"(누리집의 그 항목 하나).
-  - 품사별 문형, 뜻풀이(번호), 용례(출전 없는 것만), 관련어, 활용, 어원·규범 정보.
+  - 품사별 문형, 뜻풀이(번호), 용례(출전이 있는 것은 ≪출전≫ 표시), 관련어, 활용, 어원·규범 정보.
 
 글꼴은 일반 시스템 글꼴이다. 글자는 DB 에서 읽은 그대로이고 HTML 로만 이스케이프한다(모델이 다시 쓰지 않는다).
 """
@@ -48,7 +48,8 @@ def _sense_html(i, s):
     typ = f'<span class="typ">{esc(s["type"])}</span>' if s["type"] and s["type"] != "일반어" else ""
     sci = f' <span class="sci">(학명: {esc(s["scientific_name"])})</span>' if s["scientific_name"] else ""
     pats = f'<div class="pat">문형: {esc(", ".join(s["patterns"]))}</div>' if s["patterns"] else ""
-    exs = "".join(f"<li>{esc(x)}</li>" for x in s["examples"])
+    cites = s.get("example_sources") or [None] * len(s["examples"])
+    exs = "".join(f'<li>{esc(x)}{f" <cite>≪{esc(c)}≫</cite>" if c else ""}</li>' for x, c in zip(s["examples"], cites))
     exs = f'<ul class="ex">{exs}</ul>' if exs else ""
     return (f'<li value="{i}">{typ}{cats} {esc(s["definition"])}{sci}{pats}{exs}{_rels(s["relations"])}</li>')
 
@@ -77,7 +78,7 @@ def entry_html(e, note=None):
     if e["conjugations"]:
         by = {}
         for c in e["conjugations"]:
-            by.setdefault(c["kind"], []).append(c["form"])
+            by.setdefault(c["kind"], []).append(sl._conj_text(c))
         parts.append('<p class="note">' + " · ".join(f'<b>{esc(k)}</b> {esc(", ".join(v))}' for k, v in by.items()) + "</p>")
     if e["etymology"]:
         parts.append(f'<p class="note"><b>어원</b> {esc(e["etymology"])}</p>')
@@ -139,6 +140,7 @@ STYLE = """
   .cat { font-size: 12px; color: var(--accent); margin-right: .25rem; }
   .typ { font-size: 12px; color: var(--mute); border: 1px solid var(--line); border-radius: .3rem; padding: 0 .35rem; margin-right: .3rem; }
   .sci, .pat { color: var(--mute); font-size: 14px; }
+  cite { font-style: normal; font-size: 13px; }
   ul.ex { margin: .2rem 0; padding-left: 1.2rem; color: var(--mute); font-size: 15px; }
   .rels { margin: .2rem 0; color: var(--mute); font-size: 14px; display: flex; flex-wrap: wrap; gap: .1rem .9rem; }
   nav.toc, section.summary { margin: 1rem 0; padding: .55rem .9rem; background: var(--soft); border: 1px solid var(--line); border-radius: .6rem; }
@@ -163,7 +165,7 @@ def _page(title, body, subtitle=""):
 def render_lookup(d, word, max_entries=12, include_examples=False):
     """표제어 조회 화면. 동음이의어·용례를 줄이지 않는다(max_entries·include_examples 는 채팅 결과의 조건이며 링크 키에만 쓴다).
     표제어가 없으면 Miss."""
-    res = d.lookup(word, max_entries, True, False, full=True)
+    res = d.lookup(word, max_entries, True, full=True)
     if not res["total"]:
         raise Miss(word)
     entries = res["entries"]
@@ -178,7 +180,7 @@ def render_search(d, query, by, limit=10):
         raise Miss(query)
     entries, notes = [], {}
     for h in res["hits"]:
-        entries.append(d.entry(h["target_code"], True, False, full=True))
+        entries.append(d.entry(h["target_code"], True, full=True))
         if h["match"]:
             notes[h["target_code"]] = h["match"]
     total = res["total"]

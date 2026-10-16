@@ -149,7 +149,7 @@ class Server(unittest.TestCase):
     def test_examples_shown_in_full_on_the_page(self):
         d = sl.Dictionary()
         self.addCleanup(d.close)
-        res = d.lookup("사과", 12, True, False, full=True)
+        res = d.lookup("사과", 12, True, full=True)
         n = sum(len(s["examples"]) for e in res["entries"] for p in e["pos"] for s in p["senses"])
         self.assertGreater(n, 3)
         page = get(self.port, self.path(q="사과"))[2].decode("utf-8")
@@ -168,6 +168,22 @@ class Server(unittest.TestCase):
         self.assertEqual(sp.original_url(236214), "https://stdict.korean.go.kr/search/searchView.do?word_no=236214&searchKeywordTo=3")
         self.assertEqual(page.count('rel="noopener noreferrer"'), 12)
         self.assertEqual(page.count('target="_blank"'), 12)
+
+    def test_conjugation_pronunciation_is_shown_in_page_and_text(self):
+        """활용형의 발음(제작² 제작만[제ː장만])은 DB 에 있으므로 화면과 텍스트 출력에 모두 나온다."""
+        self.assertIn("제작만[제ː장만]", sl.format_lookup(sl.Dictionary().lookup("제작")))
+        self.assertIn("제작만[제ː장만]", get(self.port, self.path(q="제작"))[2].decode("utf-8"))
+
+    def test_cited_examples_are_shown_with_their_source(self):
+        """제작하다²: 출전 있는 용례 2개(김동인·이병주)도 출전과 함께 나온다."""
+        d = sl.Dictionary()
+        self.addCleanup(d.close)
+        code = [e["target_code"] for e in d.lookup("제작하다", 12)["entries"] if e["sup_no"] == 2][0]
+        page = get(self.port, self.path(q="제작하다"))[2].decode("utf-8")
+        art = page.split(f'<article id="e{code}">')[1].split("</article>")[0]
+        self.assertEqual(art.count("<li>"), 5)                           # 용례 5(뜻 <li value=…> 은 제외)
+        self.assertIn("<cite>≪김동인, 대수양≫</cite>", art)
+        self.assertIn("≪김동인, 대수양≫", sl.format_lookup(d.lookup("제작하다", 12, True)))     # 채팅 결과에도 같은 용례
 
     def test_search_page(self):
         status, _, body = get(self.port, self.path(kind="search", q="연:기", by="pronunciation", limit=10))

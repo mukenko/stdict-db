@@ -151,7 +151,7 @@ def lookup_word(word: str, max_entries: int = 12, include_examples: bool = False
     If the result has a line starting with "원본 보기:", it is a link to a page that shows the entries in full from the
     local database; end your answer with that link as a Markdown link ([원본 보기](URL)).
     Args: word = the Korean word or phrase, e.g. "연기"; max_entries = how many homonyms to show (default 12);
-    include_examples = also show usage examples that have no cited source."""
+    include_examples = also show usage examples (with their cited source when the dictionary gives one)."""
     res = _dict().lookup(word, max_entries, include_examples)
     spec = {"kind": "lookup", "q": word, "max_entries": max_entries, "examples": bool(include_examples)}
     return _with_footer(sl.format_lookup(res), word, spec, bool(res["total"])) + _notice_tail()
