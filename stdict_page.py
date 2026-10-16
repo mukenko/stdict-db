@@ -103,11 +103,10 @@ def toc_html(entries):
 
 
 def hyphen_html(res):
-    """표제어가 '<표제어>-' 로 시작하는 표제어(제작-하다, 제작-되다 …). 각각 누리집의 그 항목으로 가는 링크."""
+    """표제어가 '<표제어>-' 로 시작하는 표제어(제작-하다, 제작-되다 …). 각각 이 서버의 그 항목 화면(/e/<코드>)으로 가는 링크."""
     if not res.get("hyphen_words"):
         return ""
-    items = "".join(f'<li><a href="{_attr(original_url(w["target_code"]))}" target="_blank" rel="noopener noreferrer">'
-                    f'{esc(w["word"])}{sl.sup(w["sup_no"])}</a>' + (f' <span class="orig">({esc(w["original"])})</span>' if w["original"] else "")
+    items = "".join(f'<li><a href="/e/{int(w["target_code"])}">{esc(w["word"])}{sl.sup(w["sup_no"])}</a>' + (f' <span class="orig">({esc(w["original"])})</span>' if w["original"] else "")
                     + "</li>" for w in res["hyphen_words"])
     return (f'<section class="hyphen"><h3>「{esc(res["normalized"].replace(" ", ""))}-」 형태로 시작하는 표제어 '
             f'<span class="meta">{res["hyphen_total"]}개</span></h3><ul>{items}</ul></section>')
@@ -204,8 +203,18 @@ def render_search(d, query, by, limit=10):
     return _page(f"{NAMES[by]} 검색 「{sl.normalize(query)}」", body, f"{count}{note}")
 
 
+def render_entry(d, code):
+    """항목 하나(target_code)의 화면. 없으면 Miss."""
+    if not d.q("SELECT 1 FROM entries WHERE target_code=?", (code,)):
+        raise Miss(code)
+    e = d.entry(code, True, full=True)
+    return _page(e["word"] + sl.sup(e["sup_no"]), entry_html(e))
+
+
 def render_spec(d, spec):
     """링크에 등록된 검색 조건(spec)으로 화면을 그린다."""
+    if spec["kind"] == "entry":
+        return render_entry(d, spec["code"])
     if spec["kind"] == "lookup":
         return render_lookup(d, spec["q"], spec["max_entries"], spec["examples"])
     return render_search(d, spec["q"], spec["by"], spec["limit"])

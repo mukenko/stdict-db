@@ -5,6 +5,7 @@
 최근 MAX_VIEWS 개만 보관).
 
   GET /v/<32자리 16진 키>  -> HTML (lang="ko", 시스템 글꼴)
+  GET /e/<target_code>     -> 항목 하나의 HTML(화면 안의 '제작-하다' 같은 링크가 연다. 읽기 전용 공개 데이터이고 등록이 필요 없다)
 
 안전: 127.0.0.1 에만 바인드, 포트는 자동, Host 헤더 검사(DNS 재바인딩 방지, 421), GET 만 허용(405), 다른 경로 404, 잘못된 키 400,
 Cache-Control: no-store, 로그 출력 없음(stdout 은 MCP 프로토콜 전용). 보여 주는 것은 공개 사전 데이터(읽기 전용)뿐이다.
@@ -23,6 +24,7 @@ import stdict_page as sp
 MAX_VIEWS = 50
 HOST = "127.0.0.1"
 _PATH = re.compile(r"^/v/([^/]*)$")
+_ENTRY = re.compile(r"^/e/([^/]*)$")
 _KEY = re.compile(r"^[0-9a-f]{32}$")
 
 
@@ -64,14 +66,19 @@ class ViewServer:
                     if host not in (f"{HOST}:{server.port}", f"localhost:{server.port}"):
                         return self._send(421, b"misdirected request")
                     path = self.path.split("?", 1)[0]
-                    m = _PATH.match(path)
-                    if not m:
+                    m, e = _PATH.match(path), _ENTRY.match(path)
+                    if not m and not e:
                         return self._send(404, b"not found")
-                    if not _KEY.match(m.group(1)):
-                        return self._send(400, b"bad request")
-                    view = server.get(m.group(1))
-                    if view is None:
-                        return self._send(404, b"not found")
+                    if e:                                # 항목 하나: 화면 안의 링크(표제어 목록)가 연다
+                        if not re.fullmatch(r"\d{1,9}", e.group(1)):
+                            return self._send(400, b"bad request")
+                        view = ("entry", {"kind": "entry", "code": int(e.group(1))})
+                    else:
+                        if not _KEY.match(m.group(1)):
+                            return self._send(400, b"bad request")
+                        view = server.get(m.group(1))
+                        if view is None:
+                            return self._send(404, b"not found")
                     try:
                         html = server.render_spec(view[0], view[1])
                     except sl.StdictError:

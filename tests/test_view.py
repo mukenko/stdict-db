@@ -190,7 +190,18 @@ class Server(unittest.TestCase):
         sec = page.split('<section class="hyphen">')[1].split("</section>")[0]
         self.assertEqual(sec.count("<li>"), 16)                       # 채팅은 10개까지, 화면은 전부
         self.assertIn("제작-하다²", sec)
-        self.assertIn("word_no=288964&amp;searchKeywordTo=3", sec)    # 제작-하다² 의 누리집 항목
+        self.assertIn('href="/e/288964"', sec)                        # 이 서버의 그 항목 화면(제작-하다²)
+        status, _, body = get(self.port, "/e/288964")
+        self.assertEqual(status, 200)
+        entry = body.decode("utf-8")
+        self.assertEqual(entry.count("<article"), 1)
+        self.assertIn("제작하다²", entry)
+        self.assertIn("word_no=288964&amp;searchKeywordTo=3", entry)  # 그 화면에는 누리집 버튼이 있다
+        self.assertEqual(get(self.port, "/e/999999999")[0], 404)            # 없는 코드
+        self.assertEqual(get(self.port, "/e/abc")[0], 400)
+        self.assertEqual(get(self.port, "/e/1%27")[0], 400)
+        self.assertEqual(get(self.port, "/e/288964", method="POST")[0], 405)
+        self.assertEqual(get(self.port, "/e/288964", host="evil.example.com")[0], 421)
 
     def test_search_page(self):
         status, _, body = get(self.port, self.path(kind="search", q="연:기", by="pronunciation", limit=10))
