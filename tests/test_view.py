@@ -166,8 +166,8 @@ class Server(unittest.TestCase):
         for code, href in hrefs:                                   # HTML 속성이므로 & 는 &amp; 로 이스케이프됨
             self.assertEqual(href, f"https://stdict.korean.go.kr/search/searchView.do?word_no={code}&amp;searchKeywordTo=3")
         self.assertEqual(sp.original_url(236214), "https://stdict.korean.go.kr/search/searchView.do?word_no=236214&searchKeywordTo=3")
-        self.assertEqual(page.count('rel="noopener noreferrer"'), 12)
-        self.assertEqual(page.count('target="_blank"'), 12)
+        self.assertEqual(page.count('<a class="site" '), 12)         # 항목 버튼(맨 아래 '연기-…' 표제어 링크는 따로)
+        self.assertEqual(len(re.findall(r'<a class="site" [^>]*target="_blank" rel="noopener noreferrer"', page)), 12)
 
     def test_conjugation_pronunciation_is_shown_in_page_and_text(self):
         """활용형의 발음(제작² 제작만[제ː장만])은 DB 에 있으므로 화면과 텍스트 출력에 모두 나온다."""
@@ -184,6 +184,13 @@ class Server(unittest.TestCase):
         self.assertEqual(art.count("<li>"), 5)                           # 용례 5(뜻 <li value=…> 은 제외)
         self.assertIn("<cite>≪김동인, 대수양≫</cite>", art)
         self.assertIn("≪김동인, 대수양≫", sl.format_lookup(d.lookup("제작하다", 12, True)))     # 채팅 결과에도 같은 용례
+
+    def test_hyphen_headwords_section_on_the_page(self):
+        page = get(self.port, self.path(q="제작"))[2].decode("utf-8")
+        sec = page.split('<section class="hyphen">')[1].split("</section>")[0]
+        self.assertEqual(sec.count("<li>"), 16)                       # 채팅은 10개까지, 화면은 전부
+        self.assertIn("제작-하다²", sec)
+        self.assertIn("word_no=288964&amp;searchKeywordTo=3", sec)    # 제작-하다² 의 누리집 항목
 
     def test_search_page(self):
         status, _, body = get(self.port, self.path(kind="search", q="연:기", by="pronunciation", limit=10))

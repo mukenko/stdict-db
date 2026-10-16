@@ -145,6 +145,8 @@ def lookup_word(word: str, max_entries: int = 12, include_examples: bool = False
     (e.g. 갔다, 먹었다) a base-form candidate is shown labeled '규칙으로 추정' (rule-based guess; irregular verbs only when the dictionary lists an altered stem); otherwise similar entries are suggested.
     Use this for spelling, pronunciation (including long vs short vowels), meaning, Hanja and homonym checks.
     Hyphens and spaces typed by the user are handled; do not add them yourself.
+    A final line may list headwords that start with "<word>-" (e.g. 제작-하다, 제작-되다, 제작-권), shown exactly as the
+    dictionary spells them; it does not say which homonym they belong to, so do not assign them to one.
     Anything that explains WHY or HOW beyond what this tool returns (for example the sound-change rule behind a
     pronunciation such as 비음화, spelling rules, usage advice) is not dictionary content: put it in a separate part
     labeled "[사전 외 설명]". End the answer with the source line.

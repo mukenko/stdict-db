@@ -102,6 +102,17 @@ def toc_html(entries):
     return f'<nav class="toc"><ol>{"".join(items)}</ol></nav>'
 
 
+def hyphen_html(res):
+    """표제어가 '<표제어>-' 로 시작하는 표제어(제작-하다, 제작-되다 …). 각각 누리집의 그 항목으로 가는 링크."""
+    if not res.get("hyphen_words"):
+        return ""
+    items = "".join(f'<li><a href="{_attr(original_url(w["target_code"]))}" target="_blank" rel="noopener noreferrer">'
+                    f'{esc(w["word"])}{sl.sup(w["sup_no"])}</a>' + (f' <span class="orig">({esc(w["original"])})</span>' if w["original"] else "")
+                    + "</li>" for w in res["hyphen_words"])
+    return (f'<section class="hyphen"><h3>「{esc(res["normalized"].replace(" ", ""))}-」 형태로 시작하는 표제어 '
+            f'<span class="meta">{res["hyphen_total"]}개</span></h3><ul>{items}</ul></section>')
+
+
 def pron_summary_html(res):
     if not res["pron_groups"]:
         return ""
@@ -147,6 +158,8 @@ STYLE = """
   nav.toc ol, section.summary ul { list-style: none; margin: 0; padding: 0; }
   nav.toc li, section.summary li { padding: .12rem 0; }
   section.summary h3 { margin-top: .2rem; }
+  section.hyphen { margin-top: 1.6rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+  section.hyphen ul { list-style: none; margin: .3rem 0; padding: 0; display: flex; flex-wrap: wrap; gap: .2rem 1.1rem; }
   .lead { color: var(--mute); font-size: 14px; }
   footer { margin-top: 2.2rem; padding-top: .8rem; border-top: 1px solid var(--line); font-size: 13px; color: var(--mute); }
 """
@@ -169,7 +182,7 @@ def render_lookup(d, word, max_entries=12, include_examples=False):
     if not res["total"]:
         raise Miss(word)
     entries = res["entries"]
-    body = pron_summary_html(res) + toc_html(entries) + "".join(entry_html(e) for e in entries)
+    body = pron_summary_html(res) + toc_html(entries) + "".join(entry_html(e) for e in entries) + hyphen_html(res)
     return _page(res["normalized"], body, f"동음이의어 {res['total']}개 ({sl.LONG_NOTE})")
 
 

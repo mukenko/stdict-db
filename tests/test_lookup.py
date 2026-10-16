@@ -151,6 +151,19 @@ class Lookup(unittest.TestCase):
         self.assertIn("용례: 성인의 글 아닌 언문 따위를 제작하는 것은 아무리 왕명이라도 거절할 것이다. ≪김동인, 대수양≫", text)
         self.assertIn("용례: 사람은 도구를 제작하고 사용할 줄 아는 동물이다.\n", text)   # 출전 없는 용례는 그대로(채팅은 뜻마다 3개까지)
 
+    def test_hyphen_headwords_listed_without_assigning_homonyms(self):
+        res = self.d.lookup("제작")
+        self.assertEqual(res["hyphen_total"], 16)
+        self.assertEqual(len(res["hyphen_words"]), sl.HYPHEN_SHOWN)
+        names = [w["word"] + sl.sup(w["sup_no"]) for w in res["hyphen_words"]]
+        self.assertEqual(names[:4], ["제작-되다", "제작-하다¹", "제작-하다²", "제작-하다³"])   # -하다·-되다 가 먼저
+        text = sl.format_lookup(res)
+        self.assertIn("「제작-」 형태로 시작하는 표제어 16개: 제작-되다", text)
+        self.assertIn("외 6개", text)
+        self.assertEqual(len(self.d.lookup("제작", full=True)["hyphen_words"]), 16)
+        self.assertEqual(self.d.lookup("가")["hyphen_words"], [])                      # 한 글자는 찾지 않는다
+        self.assertEqual(self.d.lookup("가나다라마바사없는말")["hyphen_words"], [])
+
     def test_no_examples_by_default(self):
         res = self.d.lookup("나무", max_entries=5)
         self.assertFalse([1 for e in res["entries"] for p in e["pos"] for s in p["senses"] if s["examples"]])

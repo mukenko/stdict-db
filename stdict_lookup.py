@@ -33,6 +33,7 @@ DEFAULT_TIMEOUT = 3.0                  # 한 질의가 이 시간(초)을 넘으
 ATTRIBUTION = "출처: 국립국어원 표준국어대사전 (CC BY-SA 2.0 KR)"
 LONG_NOTE = "발음의 ː 는 장음(길게 소리 냄)을 뜻함"
 SEARCH_KINDS = ("pronunciation", "hanja", "form", "definition")
+HYPHEN_SHOWN = 10                      # 채팅 결과에 보여 줄 '<표제어>-…' 표제어 수(화면은 전부)
 
 _SUP = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
 
@@ -173,16 +174,32 @@ class Dictionary:
             "ORDER BY sup_no IS NULL, sup_no, target_code", (key,))]
         res = {"query": word, "normalized": norm, "total": len(codes), "shown": 0, "entries": [],
                "pron_groups": self._pron_groups(key) if len(codes) > 1 else [], "base_forms": [], "inferred": False,
-               "suggestions": []}
+               "suggestions": [], "hyphen_total": 0, "hyphen_words": []}
         for code in codes[:max_entries]:
             res["entries"].append(self._entry(code, include_examples, full=full))
         res["shown"] = len(res["entries"])
+        if codes:
+            res["hyphen_total"], res["hyphen_words"] = self._hyphen_words(key, None if full else HYPHEN_SHOWN)
         if not codes:
             codes, _, notes = self._find_form(norm, 8)
             res["base_forms"] = self._summaries(codes, notes=notes)
             res["inferred"] = any(n.startswith("규칙으로 추정") for n in notes.values())
             res["suggestions"] = self.suggest(norm)
         return res
+
+    def _hyphen_words(self, key, limit=None):
+        """표제어가 '<key>-' 로 시작하는 표제어(제작 → 제작-하다, 제작-되다, 제작-권 …). 사전에 실린 표제어 글자를 그대로 찾을 뿐,
+        어느 표제어의 부표제어인지는 판단하지 않는다. 한 글자는 결과가 너무 많아 찾지 않는다. (전체 개수, 목록)"""
+        if len(key) < 2 or "-" in key:
+            return 0, []
+        lo, hi = key + "-", key + "."                     # '.' 는 '-' 바로 다음 글자(word 색인으로 범위 검색)
+        total = self.q("SELECT COUNT(*) FROM entries WHERE word>=? AND word<?", (lo, hi))[0][0]
+        sql = ("SELECT target_code, word, sup_no, original_text FROM entries WHERE word>=? AND word<? "
+               "ORDER BY substr(word, ?) NOT IN ('하다', '되다', '시키다', '스럽다', '롭다'), "
+               "word, sup_no IS NULL, sup_no, target_code")       # 용언을 만드는 꼬리(-하다·-되다 …)를 먼저
+        rows = self.q(sql + (" LIMIT ?" if limit else ""), (lo, hi, len(lo) + 1) + ((limit,) if limit else ()))
+        return total, [{"target_code": r["target_code"], "word": r["word"], "sup_no": r["sup_no"], "original": r["original_text"]}
+                       for r in rows]
 
     def _pron_groups(self, norm):
         """동음이의어 전체를 발음별로 묶는다(장음 ː 가 있는 묶음이 먼저). 발음이 하나뿐이면 빈 목록."""
@@ -559,6 +576,10 @@ def format_lookup(res):
                 lines += _rel_line(s["relations"], "      ")
             if p["more_senses"]:
                 lines.append(f"   … 뜻 {p['more_senses']}개 더 있음")
+    if res.get("hyphen_words"):
+        words = ", ".join(w["word"] + sup(w["sup_no"]) for w in res["hyphen_words"])
+        more = res["hyphen_total"] - len(res["hyphen_words"])
+        lines.append(f"「{q.replace(' ', '')}-」 형태로 시작하는 표제어 {res['hyphen_total']}개: {words}" + (f" 외 {more}개" if more > 0 else ""))
     if res["shown"] < res["total"]:
         lines.append(f"(동음이의어 {res['total'] - res['shown']}개는 생략됨. max_entries 를 늘리면 더 볼 수 있음)")
     lines.append(ATTRIBUTION)
