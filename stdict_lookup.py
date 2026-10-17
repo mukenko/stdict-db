@@ -284,13 +284,14 @@ class Dictionary:
 
     def _relations(self, where, params, max_rel):
         groups, order = {}, []
-        for r in self.q(f"SELECT rel_type, word FROM relations WHERE {where} ORDER BY seq", params):
+        for r in self.q(f"SELECT rel_type, word, link_entry_code FROM relations WHERE {where} ORDER BY seq", params):
             t = r["rel_type"] or "관련"
             if t not in groups:
                 groups[t] = []
                 order.append(t)
-            groups[t].append(_link_word(r["word"]))
-        return [{"type": t, "total": len(groups[t]), "words": groups[t][:max_rel]} for t in order]
+            groups[t].append((_link_word(r["word"]), r["link_entry_code"]))
+        return [{"type": t, "total": len(groups[t]), "words": [w for w, _ in groups[t][:max_rel]],
+                 "codes": [c for _, c in groups[t][:max_rel]]} for t in order]       # codes: 같은 순서의 항목 코드(없으면 None)
 
     # -- 역검색
     def search(self, query, by, limit=10):

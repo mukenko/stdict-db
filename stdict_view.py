@@ -5,6 +5,7 @@
 최근 MAX_VIEWS 개만 보관).
 
   GET /v/<32자리 16진 키>  -> HTML (lang="ko", 시스템 글꼴)
+  GET /f/font.otf          -> 나눔바른고딕 옛한글판(설치된 것을 읽을 뿐, 어원의 옛 글자용)
   GET /e/<target_code>     -> 항목 하나의 HTML(화면 안의 '제작-하다' 같은 링크가 연다. 읽기 전용 공개 데이터이고 등록이 필요 없다)
 
 안전: 127.0.0.1 에만 바인드, 포트는 자동, Host 헤더 검사(DNS 재바인딩 방지, 421), GET 만 허용(405), 다른 경로 404, 잘못된 키 400,
@@ -53,7 +54,8 @@ class ViewServer:
                     self.send_response(status)
                     self.send_header("Content-Type", ctype)
                     self.send_header("Content-Length", str(len(body)))
-                    self.send_header("Cache-Control", "no-store")
+                    if not (extra and "Cache-Control" in extra):
+                        self.send_header("Cache-Control", "no-store")
                     self.send_header("X-Content-Type-Options", "nosniff")
                     self.send_header("Referrer-Policy", "no-referrer")
                     for k, v in (extra or {}).items():
@@ -66,6 +68,15 @@ class ViewServer:
                     if host not in (f"{HOST}:{server.port}", f"localhost:{server.port}"):
                         return self._send(421, b"misdirected request")
                     path = self.path.split("?", 1)[0]
+                    if path == sp.FONT_URL:
+                        font = sp.find_font()
+                        try:
+                            data = font.read_bytes() if font else None
+                        except OSError:
+                            data = None
+                        if data is None:
+                            return self._send(404, b"not found")
+                        return self._send(200, data, "font/otf", {"Cache-Control": "max-age=86400"})
                     m, e = _PATH.match(path), _ENTRY.match(path)
                     if not m and not e:
                         return self._send(404, b"not found")

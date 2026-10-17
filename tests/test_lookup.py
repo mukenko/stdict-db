@@ -164,6 +164,13 @@ class Lookup(unittest.TestCase):
         self.assertEqual(self.d.lookup("가")["hyphen_words"], [])                      # 한 글자는 찾지 않는다
         self.assertEqual(self.d.lookup("가나다라마바사없는말")["hyphen_words"], [])
 
+    def test_relations_carry_the_linked_entry_codes(self):
+        e = self.d.lookup("살갑다")["entries"][0]
+        rel = {r["type"]: r for r in e["relations"]}
+        self.assertEqual(rel["속담"]["words"], ["살갑기는 평양 나막신"])
+        self.assertEqual(rel["속담"]["codes"], [522248])
+        self.assertEqual(rel["참고 어휘"]["codes"], [451762])
+
     def test_no_examples_by_default(self):
         res = self.d.lookup("나무", max_entries=5)
         self.assertFalse([1 for e in res["entries"] for p in e["pos"] for s in p["senses"] if s["examples"]])

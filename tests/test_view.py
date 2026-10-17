@@ -203,6 +203,31 @@ class Server(unittest.TestCase):
         self.assertEqual(get(self.port, "/e/288964", method="POST")[0], 405)
         self.assertEqual(get(self.port, "/e/288964", host="evil.example.com")[0], 421)
 
+    def test_proverb_is_shown_with_its_definitions_and_related_words_link(self):
+        """살갑다: 속담 항목(살갑기는 평양 나막신)의 뜻풀이가 화면에 같이 나오고, 참고 어휘(슬겁다)는 이 서버의 항목 화면으로 연결된다."""
+        page = get(self.port, self.path(q="살갑다"))[2].decode("utf-8")
+        sec = page.split('<section class="phrases">')[1].split("</section>")[0]
+        self.assertIn("살갑기는 평양 나막신", sec)
+        self.assertIn("신기에 편안한 평양 나막신처럼", sec)
+        self.assertIn("안쪽이 넓은 평양 나막신처럼", sec)
+        self.assertIn('href="/e/522248"', sec)
+        self.assertIn('<a href="/e/451762">슬겁다</a>', page)
+        self.assertNotIn("<b>속담</b>", page)                         # 같은 속담을 관련어 줄에서 되풀이하지 않는다
+        self.assertEqual(get(self.port, "/e/522248")[0], 200)
+
+    def test_old_hangul_in_etymology_uses_the_embedded_font_when_installed(self):
+        page = get(self.port, self.path(q="살갑다"))[2].decode("utf-8")
+        self.assertIn("\ue982갑다(慧)", page)                          # 어원의 옛 글자는 DB 글자 그대로
+        if sp.find_font():
+            self.assertIn("@font-face", page)
+            status, headers, body = get(self.port, "/f/font.otf")
+            self.assertEqual((status, headers["Content-Type"]), (200, "font/otf"))
+            self.assertGreater(len(body), 100000)
+        os.environ["STDICT_VIEW_FONT"] = "0"
+        self.addCleanup(os.environ.pop, "STDICT_VIEW_FONT", None)
+        self.assertNotIn("@font-face", get(self.port, self.path(q="살갑다"))[2].decode("utf-8"))
+        self.assertEqual(get(self.port, "/f/font.otf")[0], 404)
+
     def test_search_page(self):
         status, _, body = get(self.port, self.path(kind="search", q="연:기", by="pronunciation", limit=10))
         self.assertEqual(status, 200)
@@ -214,7 +239,7 @@ class Server(unittest.TestCase):
         self.assertEqual(get(self.port, "/v/zzzz")[0], 400)               # 잘못된 키
         self.assertEqual(get(self.port, "/v/" + "0" * 32)[0], 404)        # 없는 항목
         self.assertEqual(get(self.port, "/")[0], 404)
-        self.assertEqual(get(self.port, "/f/font.otf")[0], 404)
+        self.assertIn(get(self.port, "/f/font.otf")[0], (200, 404))
         self.assertEqual(get(self.port, "/v/a/b")[0], 404)
         status, headers, _ = get(self.port, self.path(), method="POST")
         self.assertEqual((status, headers.get("Allow")), (405, "GET"))

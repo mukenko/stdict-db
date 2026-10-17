@@ -10,17 +10,39 @@ stdict_view.py 의 링크 서버가 '원본 보기'를 열 때 쓴다. 조회 �
 글꼴은 일반 시스템 글꼴이다. 글자는 DB 에서 읽은 그대로이고 HTML 로만 이스케이프한다(모델이 다시 쓰지 않는다).
 """
 import html
+import os
+from pathlib import Path
 
 import stdict_lookup as sl
 
 SITE_VIEW = "https://stdict.korean.go.kr/search/searchView.do"
-FONT_STACK = ('-apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans CJK KR", '
+# 옛한글(어원의 옛 글자)은 시스템 글꼴로는 깨진다: 나눔바른고딕 옛한글판을 서버가 /f/font.otf 로 한 번만 보내 웹 글꼴로 쓴다
+# (Safari 는 설치된 글꼴을 웹 페이지가 못 쓰게 막으므로 설치만으로는 안 된다). 글꼴이 없으면 일반 시스템 글꼴이다.
+FONT_FILE = "NanumBarunGothic-YetHangul.otf"
+FONT_DIRS = (Path.home() / "Library" / "Fonts", Path("/Library/Fonts"), Path("/System/Library/Fonts/Supplemental"))
+FONT_URL = "/f/font.otf"
+FONT_STACK = ('"StdictYetHangul", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans CJK KR", '
               '"Noto Sans KR", "Segoe UI", sans-serif')
 NAMES = {"pronunciation": "발음", "hanja": "원어", "form": "활용형", "definition": "뜻풀이"}
 
 
 class Miss(Exception):
     """보여 줄 항목이 없다(조건에 맞는 표제어가 이제 없음)."""
+
+
+def find_font():
+    """바른고딕 옛한글판 글꼴 파일의 경로(없거나 STDICT_VIEW_FONT=0 이면 None). 설치된 것을 읽을 뿐이고 저장소에는 글꼴이 없다.
+    STDICT_FONT_DIR 로 찾는 폴더를 바꿀 수 있다."""
+    if os.environ.get("STDICT_VIEW_FONT", "1").strip().lower() in ("0", "off", "false", "no"):
+        return None
+    dirs = [Path(os.environ["STDICT_FONT_DIR"])] if os.environ.get("STDICT_FONT_DIR") else list(FONT_DIRS)
+    for d in dirs:
+        try:
+            if (d / FONT_FILE).is_file():
+                return d / FONT_FILE
+        except OSError:
+            continue
+    return None
 
 
 def original_url(target_code):
@@ -36,11 +58,39 @@ def _attr(text):
     return html.escape(text or "", quote=True)
 
 
-def _rels(rels):
+PHRASE_TYPES = ("속담", "관용구")        # 항목 전체가 따로 있는 관계: 화면에는 그 뜻풀이까지 보여 준다
+
+
+def _word_link(word, code):
+    """관련어. 그 항목이 DB 에 있으면 이 서버의 항목 화면(/e/코드)으로 가는 링크."""
+    return f'<a href="/e/{int(code)}">{esc(word)}</a>' if code else esc(word)
+
+
+def _rels(rels, skip=()):
     out = []
     for r in rels:
-        out.append(f'<span class="rel"><b>{esc(r["type"])}</b> {esc(", ".join(r["words"]))}</span>')
+        if r["type"] in skip:
+            continue
+        codes = r.get("codes") or [None] * len(r["words"])
+        words = ", ".join(_word_link(w, c) for w, c in zip(r["words"], codes))
+        out.append(f'<span class="rel"><b>{esc(r["type"])}</b> {words}</span>')
     return f'<div class="rels">{"".join(out)}</div>' if out else ""
+
+
+def phrase_codes(e):
+    """항목의 속담·관용구(관계) 코드들."""
+    return [c for r in e["relations"] if r["type"] in PHRASE_TYPES for c in (r.get("codes") or []) if c]
+
+
+def _phrase_html(p):
+    senses = "".join(_sense_html(i, s) for pos in p["pos"] for i, s in enumerate(pos["senses"], 1))
+    return (f'<div class="phrase"><div class="ph-head"><span class="tag">{esc(p["unit"] or "")}</span> '
+            f'<a href="/e/{p["target_code"]}">{esc(p["word"])}</a></div><ol class="senses">{senses}</ol></div>')
+
+
+def phrases_html(e, phrases):
+    items = [_phrase_html(phrases[c]) for c in phrase_codes(e) if c in phrases]
+    return f'<section class="phrases"><h3>관용구/속담</h3>{"".join(items)}</section>' if items else ""
 
 
 def _sense_html(i, s):
@@ -60,7 +110,7 @@ def _pos_html(p):
     return f'<section class="pos"><h3>〔{esc(p["pos"])}〕 {pats}</h3><ol class="senses">{senses}</ol></section>'
 
 
-def entry_html(e, note=None):
+def entry_html(e, note=None, phrases=None):
     sup = sl.sup(e["sup_no"])
     head = f'{esc(e["word"])}{sup}'
     orig = f'<span class="orig">({esc(e["original"])})</span>' if e["original"] else ""
@@ -84,8 +134,10 @@ def entry_html(e, note=None):
         parts.append(f'<p class="note"><b>어원</b> {esc(e["etymology"])}</p>')
     for n in e["norm_info"]:
         parts.append(f'<p class="note"><b>규범({esc(n["type"])})</b> {esc(n["desc"])}</p>')
-    parts.append(_rels(e["relations"]))
+    parts.append(_rels(e["relations"], skip=PHRASE_TYPES if phrases else ()))
     parts.extend(_pos_html(p) for p in e["pos"])
+    if phrases:
+        parts.append(phrases_html(e, phrases))
     parts.append("</article>")
     return "".join(parts)
 
@@ -157,6 +209,10 @@ STYLE = """
   nav.toc ol, section.summary ul { list-style: none; margin: 0; padding: 0; }
   nav.toc li, section.summary li { padding: .12rem 0; }
   section.summary h3 { margin-top: .2rem; }
+  section.phrases { margin-top: 1.1rem; }
+  .phrase { margin: .5rem 0 .9rem; padding-left: .8rem; border-left: 3px solid var(--line); }
+  .ph-head { font-weight: 600; }
+  .ph-head .tag { font-size: 12px; font-weight: 500; color: var(--mute); border: 1px solid var(--line); border-radius: .3rem; padding: 0 .4rem; margin-right: .3rem; }
   section.hyphen { margin-top: 1.6rem; padding-top: 1rem; border-top: 1px solid var(--line); }
   section.hyphen ul { list-style: none; margin: .3rem 0; padding: 0; display: flex; flex-wrap: wrap; gap: .2rem 1.1rem; }
   .lead { color: var(--mute); font-size: 14px; }
@@ -165,13 +221,25 @@ STYLE = """
 
 
 def _page(title, body, subtitle=""):
-    css = STYLE.replace("__STACK__", FONT_STACK)
+    face = (f"  @font-face {{ font-family: 'StdictYetHangul'; src: url({FONT_URL}) format('opentype'); }}\n"
+            if find_font() else "")
+    css = face + STYLE.replace("__STACK__", FONT_STACK)
     sub = f'<p class="lead">{esc(subtitle)}</p>' if subtitle else ""
     return (f'<!doctype html>\n<html lang="ko">\n<meta charset="utf-8">\n'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">\n'
             f'<title>{esc(title)} — 표준국어대사전</title>\n<style>{css}</style>\n'
             f'<div class="site-name">표준국어대사전</div>\n<h1>{esc(title)}</h1>\n{sub}{body}\n'
             f'<footer>{esc(sl.ATTRIBUTION)}</footer>\n')
+
+
+def load_phrases(d, entries):
+    """화면에 그릴 항목들의 속담·관용구 항목을 읽는다({코드: 항목}). DB 에 없는 코드는 건너뛴다."""
+    out = {}
+    for e in entries:
+        for c in phrase_codes(e):
+            if c not in out and d.q("SELECT 1 FROM entries WHERE target_code=?", (c,)):
+                out[c] = d.entry(c, True, full=True)
+    return out
 
 
 def render_lookup(d, word, max_entries=12, include_examples=False):
@@ -181,7 +249,8 @@ def render_lookup(d, word, max_entries=12, include_examples=False):
     if not res["total"]:
         raise Miss(word)
     entries = res["entries"]
-    body = pron_summary_html(res) + toc_html(entries) + "".join(entry_html(e) for e in entries) + hyphen_html(res)
+    ph = load_phrases(d, entries)
+    body = pron_summary_html(res) + toc_html(entries) + "".join(entry_html(e, phrases=ph) for e in entries) + hyphen_html(res)
     return _page(res["normalized"], body, f"동음이의어 {res['total']}개 ({sl.LONG_NOTE})")
 
 
@@ -199,7 +268,8 @@ def render_search(d, query, by, limit=10):
     count = (f"앞쪽 {res['shown']}개만 표시" if total is None
              else f"{total}개" + (f" 중 {res['shown']}개" if res["shown"] < total else ""))
     note = f" ({sl.LONG_NOTE})" if by == "pronunciation" else ""
-    body = toc_html(entries) + "".join(entry_html(e, notes.get(e["target_code"])) for e in entries)
+    ph = load_phrases(d, entries)
+    body = toc_html(entries) + "".join(entry_html(e, notes.get(e["target_code"]), ph) for e in entries)
     return _page(f"{NAMES[by]} 검색 「{sl.normalize(query)}」", body, f"{count}{note}")
 
 
@@ -208,7 +278,7 @@ def render_entry(d, code):
     if not d.q("SELECT 1 FROM entries WHERE target_code=?", (code,)):
         raise Miss(code)
     e = d.entry(code, True, full=True)
-    return _page(e["word"] + sl.sup(e["sup_no"]), entry_html(e))
+    return _page(e["word"] + sl.sup(e["sup_no"]), entry_html(e, phrases=load_phrases(d, [e])))
 
 
 def render_spec(d, spec):
