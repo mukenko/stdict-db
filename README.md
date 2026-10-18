@@ -20,7 +20,6 @@ LLM이 기억이 아니라 사전을 보고 표기·발음·뜻·한자를 확�
 | `stdict_stem.py` | 규칙 활용형에서 어간 후보를 만드는 순수 함수(조회가 사전에서 확인) |
 | `stdict_mcp.py` | MCP 서버(stdio, 선택적으로 Streamable HTTP) |
 | `stdict_view.py`, `stdict_page.py` | '원본 보기' 링크가 여는 이 컴퓨터 전용 작은 웹 서버와 문서형 화면 |
-| `docs/` | 국립국어원 오픈 API 명세 사본 |
 
 ## 준비
 
