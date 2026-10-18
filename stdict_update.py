@@ -195,6 +195,19 @@ def change_counts(db, since):
     return dict(db.execute("SELECT kind, COUNT(*) FROM changes WHERE at>=? GROUP BY kind", (since,)).fetchall())
 
 
+KIND_LABEL = {"headword_changed": "표제어 교체", "deleted": "삭제", "added": "신규"}
+ALERT_FILE = ROOT / "data" / "last_alert.txt"
+
+
+def alert_lines(db, since):
+    rows = db.execute("SELECT kind, target_code, old_word, new_word FROM changes WHERE at>=? AND kind IN (?,?) ORDER BY id",
+                      (since, "headword_changed", "deleted")).fetchall()
+    out = []
+    for kind, code, old, new in rows:
+        out.append(f"{KIND_LABEL[kind]} {code}: {old} -> {new}" if kind == "headword_changed" else f"{KIND_LABEL[kind]} {code}: {old}")
+    return out
+
+
 def needs_build(counts, supno_saved):
     return any(counts.get(k) for k in BUILD_KINDS) or supno_saved > 0
 
@@ -276,6 +289,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true", help="할 일만 보여 줌")
     ap.add_argument("--status", action="store_true", help="마지막 실행 결과와 로그 끝부분")
+    ap.add_argument("--alerts", action="store_true", help="마지막 알림(표제어 교체·삭제)의 전체 내용")
     ap.add_argument("--steps", help="일부 단계만(쉼표로 구분: updates,tail,oldest,empties,sample,supno,build)")
     ap.add_argument("--weekly", action="store_true", help="요일과 상관없이 주간 단계(empties, sample)도 실행")
     ap.add_argument("--oldest-n", type=int, default=OLDEST_PER_DAY, help=f"refresh --oldest 개수(기본 {OLDEST_PER_DAY})")
@@ -286,6 +300,9 @@ def main():
     args = ap.parse_args()
     if args.status:
         return do_status()
+    if args.alerts:
+        print(ALERT_FILE.read_text(encoding="utf-8") if ALERT_FILE.exists() else "(알림 기록 없음)")
+        return
     only = set(args.steps.split(",")) if args.steps else None
     steps = plan_steps(dt.date.today(), only, args.oldest_n, True if args.weekly else None)
     if args.dry_run:
@@ -345,6 +362,7 @@ def main():
         db = sqlite3.connect(f"file:{sf.DB_PATH}?mode=ro", uri=True)
         try:
             counts = change_counts(db, start_iso)
+            alerts = alert_lines(db, start_iso)
         finally:
             db.close()
         built = False
@@ -374,7 +392,9 @@ def main():
         if failed:
             notify("업데이트 실패: " + ", ".join(failed)[:150])
         elif rare.get("headword_changed") or rare.get("deleted"):
-            notify(f"표제어 교체/삭제 확인 필요: {rare}")
+            ALERT_FILE.write_text(f"{sf.now()}\n" + "\n".join(alerts) + "\n", encoding="utf-8")
+            kinds = ", ".join(f"{KIND_LABEL[k]} {v}건" for k, v in rare.items() if k in KIND_LABEL)
+            notify(f"{kinds}. 자세히: stdict-db 폴더에서 python3 stdict_update.py --alerts")
         if failed:
             sys.exit(1)
     except KeyboardInterrupt:
