@@ -200,11 +200,16 @@ ALERT_FILE = ROOT / "data" / "last_alert.txt"
 
 
 def alert_lines(db, since):
-    rows = db.execute("SELECT kind, target_code, old_word, new_word FROM changes WHERE at>=? AND kind IN (?,?) ORDER BY id",
-                      (since, "headword_changed", "deleted")).fetchall()
+    rows = db.execute("SELECT kind, target_code, old_word, new_word, old_origin, new_origin FROM changes "
+                      "WHERE at>=? AND kind IN (?,?) ORDER BY id", (since, "headword_changed", "deleted")).fetchall()
     out = []
-    for kind, code, old, new in rows:
-        out.append(f"{KIND_LABEL[kind]} {code}: {old} -> {new}" if kind == "headword_changed" else f"{KIND_LABEL[kind]} {code}: {old}")
+    for kind, code, old, new, old_o, new_o in rows:
+        if kind != "headword_changed":
+            out.append(f"{KIND_LABEL[kind]} {code}: {old}")
+        elif old == new and old_o != new_o:                     # 표제어는 같고 원어(한자 등)만 바뀐 경우
+            out.append(f"{KIND_LABEL[kind]} {code}: {old} 원어 {old_o or '(없음)'} -> {new_o or '(없음)'}")
+        else:
+            out.append(f"{KIND_LABEL[kind]} {code}: {old} -> {new}")
     return out
 
 

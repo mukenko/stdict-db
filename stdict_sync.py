@@ -56,6 +56,7 @@ SEARCH_MAX = PAGE_SIZE * MAX_PAGE
 RETRIES = 3                                     # 어긋난 열거를 처음부터 다시 하는 최대 횟수
 ZERO_RECHECKS = 2                               # total=0 을 확정하기 전에 같은 질의를 다시 보내는 횟수
 RETRY_WAIT = 5.0                                # 재시도 전 대기(초)
+MAX_DELETES_PER_RUN = 20                        # 한 실행에서 삭제로 확정할 수 있는 최대 개수(평소 하루 0~3건). 넘으면 이상 징후로 멈춤
 BATCH = 50                                      # 이만큼 모아서 이상 징후를 검사한 뒤 한 번에 반영
 
 SYNC_SCHEMA = """
@@ -565,6 +566,12 @@ def is_anomaly(pending, mode):
     return n >= 50 and (deletes + k["edited"] + k["headword_changed"]) / n > 0.10
 
 
+def delete_cap_exceeded(already, pending, cap):
+    """이번 실행의 삭제 확정이 상한을 넘는지. 묶음 단위 비율 검사(is_anomaly)는 코드가 몰려 비는 장애만 잡고,
+    흩어져서 비는 장애(묶음당 10% 미만, 하루 수백 건)는 통과하므로 절대 개수로도 막는다. cap 0 = 제한 없음."""
+    return bool(cap) and already + sum(1 for a, _ in pending if a["kind"] == "deleted") > cap
+
+
 def run_refresh(client, db, codes, mode, args, stop_after_empty=0):
     """codes 를 하나씩 다시 받아 비교하고 반영한다. (완료 여부, 집계)를 돌려준다."""
     max_ok = db.execute("SELECT MAX(target_code) FROM fetch_state WHERE status='ok'").fetchone()[0] or 0
@@ -578,9 +585,14 @@ def run_refresh(client, db, codes, mode, args, stop_after_empty=0):
     def flush():
         if not pending:
             return True
-        if is_anomaly(pending, mode):
+        cap = getattr(args, "max_deletes", MAX_DELETES_PER_RUN)
+        capped = delete_cap_exceeded(counts["deleted"], pending, cap)
+        if capped or is_anomaly(pending, mode):
             k = Counter(a["kind"] for a, _ in pending)
-            print(f"\n⚠ 이상 징후: 이번 묶음 {len(pending)}건 중 변경·삭제가 비정상적으로 많습니다 {dict(k)}.")
+            if capped:
+                print(f"\n⚠ 이상 징후: 이번 실행의 삭제 확정이 상한 {cap}건을 넘습니다(이미 {counts['deleted']}건 확정, 이 묶음 {k['deleted']}건).")
+            else:
+                print(f"\n⚠ 이상 징후: 이번 묶음 {len(pending)}건 중 변경·삭제가 비정상적으로 많습니다 {dict(k)}.")
             print("  API 장애나 응답 형식 변경일 수 있어 이 묶음은 반영하지 않고 중단합니다. 잠시 후 다시 실행하세요.")
             pending.clear()
             state["completed"] = False
@@ -1012,6 +1024,8 @@ def main():
     safety = argparse.ArgumentParser(add_help=False)
     safety.add_argument("--scan-end", type=int, default=540000,
                         help="수집 범위의 끝(기본 540000). 이 이하에서 아직 수집 안 된 코드는 건너뜁니다")
+    safety.add_argument("--max-deletes", type=int, default=MAX_DELETES_PER_RUN,
+                        help=f"한 실행에서 삭제로 확정할 최대 개수(기본 {MAX_DELETES_PER_RUN}, 0=제한 없음). 넘으면 이상 징후로 멈춤")
     safety.add_argument("--confirm-days", type=int, default=1,
                         help="삭제 의심 후 며칠이 지나야 삭제로 확정할지(기본 1: 다른 날 다시 비어 있으면 확정)")
 
