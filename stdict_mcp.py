@@ -66,8 +66,9 @@ INSTRUCTIONS = (
     "did not cover. Go wider only when the user asks. "
     "When the output has a pronunciation summary, use it to separate long-vowel words from short-vowel ones. "
     "If a tool says a word is not an entry, say so; do not invent dictionary content. "
-    "When a tool result contains a line starting with \"원본 보기:\" followed by a link, end your answer with that link "
-    "as a Markdown link ([원본 보기](URL)). "
+    "When a tool result contains a Markdown link line \"[원본 보기](URL)\", you MUST copy that exact line as the last "
+    "line of your answer, after everything else: it opens the full entries from the local database and the user relies "
+    "on it. Do not omit it, reword it or replace it with the plain address. "
     "Answer in the user's language (Korean unless the user writes otherwise) and mention that the source is the "
     "Standard Korean Language Dictionary."
 )
@@ -95,13 +96,13 @@ def _view_link_enabled():
 
 
 def _with_footer(text, label="", spec=None, found=True):
-    """결과의 출처 줄(sl.ATTRIBUTION, 맨 끝) 앞에 (로컬 서버이고 찾았으면) '원본 보기:' 줄을 끼운다: 링크 줄 → 출처 줄 순서.
+    """결과의 출처 줄(sl.ATTRIBUTION, 맨 끝) 앞에 (로컬 서버이고 찾았으면) '[원본 보기](주소)' 마크다운 링크 한 줄을 끼운다: 링크 줄 → 출처 줄 순서. 모델이 그대로 옮겨 적기 쉽게 완성된 링크로 낸다.
     링크 줄은 지시가 아니라 주소만 담은 사실이다. 링크를 적는 규칙은 서버 지침·도구 설명에 둔다(도구 결과 안의 지시는 Claude 가
     주입으로 본다). spec 은 링크 서버가 클릭할 때 다시 그릴 검색 조건이다."""
     if spec is None or not found or not _view_link_enabled():
         return text
     try:
-        line = f"원본 보기: {view.get_server().add_query(label or 'result', **spec)}"
+        line = f"[원본 보기]({view.get_server().add_query(label or 'result', **spec)})"
     except Exception:  # noqa: BLE001  서버를 못 띄워도 조회는 돌려준다
         return text
     body, sep, tail = text.rpartition("\n")
@@ -150,8 +151,8 @@ def lookup_word(word: str, max_entries: int = 12, include_examples: bool = False
     Anything that explains WHY or HOW beyond what this tool returns (for example the sound-change rule behind a
     pronunciation such as 비음화, spelling rules, usage advice) is not dictionary content: put it in a separate part
     labeled "[사전 외 설명]". End the answer with the source line.
-    If the result has a line starting with "원본 보기:", it is a link to a page that shows the entries in full from the
-    local database; end your answer with that link as a Markdown link ([원본 보기](URL)).
+    If the result has a Markdown link line "[원본 보기](URL)", it opens a page that shows the entries in full from the
+    local database; you MUST copy that exact line as the last line of your answer (do not omit or reword it).
     Args: word = the Korean word or phrase, e.g. "연기"; max_entries = how many homonyms to show (default 12);
     include_examples = also show usage examples (with their cited source when the dictionary gives one)."""
     res = _dict().lookup(word, max_entries, include_examples)
@@ -174,8 +175,8 @@ def search_dictionary(query: str, by: Literal["pronunciation", "hanja", "form", 
     For checking a single known word, use lookup_word instead.
     Explanations beyond the returned entries belong in a separate part labeled "[사전 외 설명]"; end the answer
     with the source line.
-    If the result has a line starting with "원본 보기:", it is a link to a page that shows the found entries in full from
-    the local database; end your answer with that link as a Markdown link ([원본 보기](URL)).
+    If the result has a Markdown link line "[원본 보기](URL)", it opens a page that shows the found entries in full from
+    the local database; you MUST copy that exact line as the last line of your answer (do not omit or reword it).
     Args: query = the text to search; by = the search kind above; limit = maximum results (default 10)."""
     res = _dict().search(query, by, limit)
     spec = {"kind": "search", "q": query, "by": by, "limit": limit}

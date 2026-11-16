@@ -104,16 +104,16 @@ class Protocol(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Note to assistant", text(await s.call_tool("lookup_word", {"word": "연기"})))
 
     async def test_result_link_opens_the_page(self):
-        """결과 끝의 '원본 보기:' 링크는 그 MCP 프로세스가 살아 있는 동안 열린다(출처 줄 바로 앞, 지침에 링크 규칙)."""
+        """결과 끝의 '[원본 보기](주소)' 링크는 그 MCP 프로세스가 살아 있는 동안 열린다(출처 줄 바로 앞, 지침에 링크 규칙)."""
         import re
         import urllib.request
         async with session() as (s, init):
-            self.assertIn("원본 보기:", init.instructions)
+            self.assertIn("[원본 보기](URL)", init.instructions)
             out = text(await s.call_tool("lookup_word", {"word": "연기", "max_entries": 2}))
             lines = out.split("\n")
-            self.assertTrue(lines[-3].startswith("원본 보기: http://127.0.0.1:"))
+            self.assertTrue(lines[-3].startswith("[원본 보기](http://127.0.0.1:") and lines[-3].endswith(")"))
             self.assertEqual(lines[-2], sl.ATTRIBUTION)
-            url = lines[-3].split(" ", 2)[2]
+            url = lines[-3][len("[원본 보기]("):-1]
             self.assertTrue(re.match(r"^http://127\.0\.0\.1:\d+/v/[0-9a-f]{32}$", url))
             with urllib.request.urlopen(url, timeout=5) as r:
                 page = r.read().decode("utf-8")

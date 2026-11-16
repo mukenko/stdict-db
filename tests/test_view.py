@@ -20,7 +20,7 @@ import stdict_view as sv  # noqa: E402
 DB_OK = sl.DEFAULT_DB.exists()
 needs_db = unittest.skipUnless(DB_OK, "조회용 DB가 없습니다")
 LOOKUP = {"kind": "lookup", "q": "연기", "max_entries": 12, "examples": False}
-LINK = re.compile(r"^원본 보기: (http://127\.0\.0\.1:(\d+)/v/([0-9a-f]{32}))$", re.M)
+LINK = re.compile(r"^\[원본 보기\]\((http://127\.0\.0\.1:(\d+)/v/([0-9a-f]{32}))\)$", re.M)
 
 
 def get(port, path, host=None, method="GET"):
@@ -69,7 +69,7 @@ class Footer(unittest.TestCase):
             os.environ["STDICT_VIEW_LINK"] = value
             self.assertEqual(sm._with_footer(self.text(), "연기", LOOKUP), self.text(), value)
         os.environ["STDICT_VIEW_LINK"] = "1"
-        self.assertIn("원본 보기:", sm._with_footer(self.text(), "연기", LOOKUP))
+        self.assertIn("[원본 보기](", sm._with_footer(self.text(), "연기", LOOKUP))
 
     def test_server_failure_still_returns_the_result(self):
         with mock.patch.object(sv, "get_server", side_effect=OSError("port")):
@@ -88,7 +88,7 @@ class Footer(unittest.TestCase):
             out = sm.lookup_word(word)
             self.assertRegex(out, LINK, word)
             lines = out.split("\n")
-            self.assertTrue(lines[-3].startswith("원본 보기: "), word)       # 링크 → 출처 → 알림
+            self.assertTrue(lines[-3].startswith("[원본 보기](http"), word)       # 링크 → 출처 → 알림
             self.assertEqual(lines[-2], sl.ATTRIBUTION)
             self.assertTrue(lines[-1].startswith("[Note to assistant"))
         for by, q in (("pronunciation", "연:기"), ("hanja", "演技"), ("form", "가계해"), ("definition", "배우가 배역")):
@@ -105,10 +105,10 @@ class Footer(unittest.TestCase):
         sm.HTTP_MODE = True
         remote = sm.lookup_word("연기")
         self.assertNotIn("원본 보기", remote)
-        self.assertEqual(remote, "\n".join(ln for ln in local.split("\n") if not ln.startswith("원본 보기:")))
+        self.assertEqual(remote, "\n".join(ln for ln in local.split("\n") if not ln.startswith("[원본 보기](")))
 
     def test_link_rule_is_in_instructions_and_tool_descriptions_not_in_results(self):
-        self.assertIn('"원본 보기:"', sm.INSTRUCTIONS)
+        self.assertIn("MUST copy that exact line", sm.INSTRUCTIONS)
         self.assertIn("[원본 보기](URL)", sm.INSTRUCTIONS)
         for fn in sm.TOOLS:
             self.assertIn("[원본 보기](URL)", fn.__doc__, fn.__name__)
