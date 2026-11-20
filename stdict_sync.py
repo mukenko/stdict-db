@@ -448,6 +448,22 @@ def load_old(db, code):
     return {"hash": h, "word": w, "origin": o, "missing_since": None, "last_changed": None}
 
 
+def format_drift(old_item, new_item):
+    """내용이 아니라 API 응답 형식이 바뀐 것으로 보이는지(2026-11-20: 어휘 관계 type 이 비고 link 가 kdict.korean.go.kr 새 형식으로 바뀜).
+    ① 같은 개수의 lexical_info/relation_info 에서 이전에 있던 type 이 비어 오거나 ② 이전에 없던 새 사이트 주소의 link 가 생긴 경우.
+    이런 응답을 그대로 받으면 비슷한말·반대말 표시와 링크 번호가 사라진다."""
+    def types(item):
+        return [(e.findtext("type") or "").strip() for e in item.iter() if e.tag in ("lexical_info", "relation_info")]
+
+    def new_site(item):
+        return any("kdict.korean.go.kr" in (e.text or "") for e in item.iter("link"))
+
+    old_t, new_t = types(old_item), types(new_item)
+    if len(old_t) == len(new_t) and any(o and not n for o, n in zip(old_t, new_t)):
+        return True
+    return new_site(new_item) and not new_site(old_item)
+
+
 def precheck(status, code, ctx):
     """API 를 부르기 전에 건너뛸 코드를 거른다."""
     if status == "error":
@@ -482,6 +498,10 @@ def decide(db, code, status, res, ctx):
             a["kind"] = "headword_changed"
         else:
             a["kind"] = "edited"
+        if a["kind"] in ("edited", "headword_changed"):
+            old_item = local_item(db, code)
+            if old_item is not None and format_drift(old_item, chan(sf.parse_xml(res["text"])).find("item")):
+                a["kind"] = "format_drift"     # 내용 수정이 아니라 응답 형식 변경 의심: 반영하지 않고 멈춘다(flush)
         return a
     # 로컬에서 empty 였거나, 수집 범위 밖(뒤쪽)의 코드
     if not res["found"]:
@@ -585,6 +605,13 @@ def run_refresh(client, db, codes, mode, args, stop_after_empty=0):
     def flush():
         if not pending:
             return True
+        drift = [a["code"] for a, _ in pending if a["kind"] == "format_drift"]
+        if drift:
+            print(f"\n⚠ 이상 징후: API 응답 형식이 바뀐 것으로 보이는 항목 {len(drift)}건(어휘 관계 type 이 비었거나 링크가 새 사이트 주소) {drift[:8]}.")
+            print("  내용 수정이 아니라 형식 변경일 수 있어 이 묶음은 반영하지 않고 중단합니다. 누리집을 확인한 뒤 수집·빌드를 새 형식에 맞게 고쳐야 합니다.")
+            pending.clear()
+            state["completed"] = False
+            return False
         cap = getattr(args, "max_deletes", MAX_DELETES_PER_RUN)
         capped = delete_cap_exceeded(counts["deleted"], pending, cap)
         if capped or is_anomaly(pending, mode):
@@ -658,7 +685,7 @@ def run_refresh(client, db, codes, mode, args, stop_after_empty=0):
 
 
 LABELS = [("verified", "변화 없음"), ("edited", "내용 수정"), ("headword_changed", "표제어/원어 교체"),
-          ("added", "신규"), ("delete_suspect", "삭제 의심"), ("suspect_deleted", "삭제 의심(첫 확인)"),
+          ("format_drift", "형식 변경 의심(반영 안 함)"), ("added", "신규"), ("delete_suspect", "삭제 의심"), ("suspect_deleted", "삭제 의심(첫 확인)"),
           ("suspect_waiting", "삭제 의심(대기 중)"), ("deleted", "삭제 확정"), ("still_empty", "여전히 빈 코드"),
           ("tail_empty", "뒤쪽 빈 코드"), ("skip_unscanned", "건너뜀(수집 전)"), ("skip_error", "건너뜀(오류 상태)"),
           ("error", "조회 오류")]
