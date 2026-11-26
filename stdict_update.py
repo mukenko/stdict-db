@@ -43,6 +43,8 @@ SAMPLE_WEEKLY = 2000
 WEEKLY_DAY = 6                                        # 일요일(월요일=0)
 ALERT_KINDS = ("headword_changed", "deleted", "added")
 BUILD_KINDS = ("added", "edited", "headword_changed", "deleted")
+HELD_PROBE = 20                                       # 형식 변경 모드에서 하루에 다시 확인해 복구를 점검하는 보류 항목 수
+HELD_CATCHUP = 4000                                   # 복구된 뒤 보류 목록을 따라잡는 하루 개수
 
 
 class LockBusy(Exception):
@@ -149,12 +151,36 @@ def release_lock(lock=None):
 
 
 # ---------------------------------------------------------------- 할 일 계획
-def plan_steps(today, only=None, oldest_n=OLDEST_PER_DAY, weekly=None):
+def drift_state():
+    """(형식 변경 모드가 시작된 시각 또는 None, 보류한 코드 수). 아직 해당 표가 없는 DB면 (None, 0)."""
+    try:
+        db = sqlite3.connect(f"file:{sf.DB_PATH}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None, 0
+    try:
+        mark = db.execute("SELECT value FROM sync_meta WHERE key=?", (ss.DRIFT_MARK,)).fetchone()
+        return (mark[0] if mark else None), db.execute("SELECT COUNT(*) FROM format_drift_held").fetchone()[0]
+    except sqlite3.Error:
+        return None, 0
+    finally:
+        db.close()
+
+
+def held_per_run(mark, n):
+    """보류 항목을 하루에 몇 개 다시 확인할지. 모드 중에는 소수(복구 점검), 복구 뒤 남은 것이 있으면 따라잡기, 없으면 0."""
+    if mark:
+        return HELD_PROBE
+    return HELD_CATCHUP if n else 0
+
+
+def plan_steps(today, only=None, oldest_n=OLDEST_PER_DAY, weekly=None, held_n=0):
     """(이름, sync 인자 목록) 목록. build 는 별도 처리. only 가 있으면 그 이름만."""
     if weekly is None:
         weekly = today.weekday() == WEEKLY_DAY
-    steps = [("updates", ["updates"]),
-             ("tail", ["refresh", "--tail"]),
+    steps = [("updates", ["updates"])]
+    if held_n:
+        steps.append(("held", ["refresh", "--held", str(held_n)]))
+    steps += [("tail", ["refresh", "--tail"]),
              ("oldest", ["refresh", "--oldest", str(oldest_n)])]
     if weekly:
         steps += [("empties", ["refresh", "--empties", str(EMPTIES_WEEKLY)]),
@@ -284,6 +310,8 @@ def do_status():
     for k in ("last_start", "last_end", "last_result", "last_summary"):
         print(f"{k}: {meta.get('update_' + k, '(없음)')}")
     print(f"updates 기준일: {dict(db.execute('SELECT key, value FROM sync_meta')).get('last_updates_date', '(없음)')}")
+    mark, held = drift_state()
+    print(f"형식 변경 모드: {('켜짐 (' + mark + ' 부터, 보류 ' + format(held, ',') + '건)') if mark else '꺼짐'}")
     if LOG_PATH.exists():
         print("\n--- 로그 끝")
         for line in LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()[-15:]:
@@ -309,7 +337,8 @@ def main():
         print(ALERT_FILE.read_text(encoding="utf-8") if ALERT_FILE.exists() else "(알림 기록 없음)")
         return
     only = set(args.steps.split(",")) if args.steps else None
-    steps = plan_steps(dt.date.today(), only, args.oldest_n, True if args.weekly else None)
+    mark0, n0 = drift_state()
+    steps = plan_steps(dt.date.today(), only, args.oldest_n, True if args.weekly else None, held_per_run(mark0, n0))
     if args.dry_run:
         print("할 일(호출·변경 없음):")
         for name, argv in steps:
@@ -370,6 +399,13 @@ def main():
             alerts = alert_lines(db, start_iso)
         finally:
             db.close()
+        mark1, n1 = drift_state()
+        if mark1 and not mark0:
+            log(f"형식 변경 모드 시작: 영향받는 항목은 이전 버전으로 보류하고 나머지는 계속 갱신합니다(보류 {n1}건)")
+            notify(f"API 응답 형식 변경 감지: 영향 항목 {n1}건은 이전 버전으로 보류하고 나머지는 계속 갱신합니다")
+        elif mark0 and not mark1:
+            log("형식 변경 모드 종료: API 응답 형식이 복구되었습니다")
+            notify("API 응답 형식이 복구되었습니다. 보류했던 항목을 다시 확인합니다")
         built = False
         if not aborted and (args.force_build or needs_build(counts, supno_saved)) and (not only or "build" in only):
             checkpoint()
@@ -390,7 +426,8 @@ def main():
         elif aborted or incomplete:
             result = "incomplete"
         summary = (f"변경 {dict(counts) or '없음'}, 어깨번호 갱신 {'예' if supno_saved else '아니오'}, 빌드 {'했음' if built else '안 함'}, "
-                   f"미완료 단계 {incomplete or '없음'}, 실패 {failed or '없음'}, 오늘 호출 {used}/{args.limit}")
+                   f"미완료 단계 {incomplete or '없음'}, 실패 {failed or '없음'}, 오늘 호출 {used}/{args.limit}"
+                   + (f", 형식 변경 모드(보류 {n1:,}건)" if mark1 else ""))
         log(f"=== 끝: {result} — {summary} ===")
         meta_write(last_end=sf.now(), last_result=result, last_summary=summary)
         rare = {k: counts[k] for k in ALERT_KINDS if counts.get(k)}

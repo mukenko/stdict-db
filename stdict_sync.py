@@ -80,6 +80,9 @@ CREATE TABLE IF NOT EXISTS changes(
     old_hash TEXT, new_hash TEXT, note TEXT);
 CREATE INDEX IF NOT EXISTS changes_at ON changes(at);
 CREATE TABLE IF NOT EXISTS sync_meta(key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS format_drift_held(   -- 형식 변경 의심으로 반영하지 않고 보류한 코드(API 가 복구되면 우선 다시 확인)
+    target_code INTEGER PRIMARY KEY, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL,
+    is_new INTEGER NOT NULL DEFAULT 0);    -- 1 = 로컬에 없던 신규 항목이라 저장하지 않음
 CREATE TABLE IF NOT EXISTS supno_issues(      -- 어깨번호 보충에서 검색 결과가 로컬과 안 맞은 표제어(저장하지 않음)
     plain TEXT PRIMARY KEY, at TEXT NOT NULL, kind TEXT NOT NULL,
     local_n INTEGER, remote_n INTEGER, detail TEXT);
@@ -464,6 +467,29 @@ def format_drift(old_item, new_item):
     return new_site(new_item) and not new_site(old_item)
 
 
+def format_drift_new(item):
+    """로컬에 없던 신규 항목이 새 형식으로 왔는지. 예전 데이터에는 빈 lexical_info/type 도 kdict 링크도 없었다(표본 62,350건 확인)."""
+    if any((e.findtext("type") or "").strip() == "" for e in item.iter("lexical_info")):
+        return True
+    return any("kdict.korean.go.kr" in (e.text or "") for e in item.iter("link"))
+
+
+DRIFT_MARK = "format_drift_since"              # sync_meta: 형식 변경 모드가 시작된 시각(복구되면 지운다)
+
+
+def hold_drift(db, code, t, new=False):
+    """형식 변경 의심 항목을 반영하지 않고 보류 목록에 올린다. 처음 올릴 때만 changes 에 기록하고 모드를 켠다(트랜잭션 안에서 호출)."""
+    row = db.execute("SELECT 1 FROM format_drift_held WHERE target_code=?", (code,)).fetchone()
+    if row:
+        db.execute("UPDATE format_drift_held SET last_seen=? WHERE target_code=?", (t, code))
+        return
+    db.execute("INSERT INTO format_drift_held(target_code, first_seen, last_seen, is_new) VALUES(?,?,?,?)",
+               (code, t, t, 1 if new else 0))
+    db.execute("INSERT INTO changes(at, target_code, kind, note) VALUES(?,?,?,?)",
+               (t, code, "format_drift", "신규 항목, 저장하지 않음" if new else "API 응답 형식 변경 의심, 이전 버전 유지"))
+    db.execute("INSERT OR IGNORE INTO sync_meta(key, value) VALUES(?,?)", (DRIFT_MARK, t))
+
+
 def precheck(status, code, ctx):
     """API 를 부르기 전에 건너뛸 코드를 거른다."""
     if status == "error":
@@ -509,6 +535,8 @@ def decide(db, code, status, res, ctx):
     else:
         a["kind"] = "added"
         a["note"] = "tail" if code > ctx["max_ok"] else "gap"
+        if format_drift_new(chan(sf.parse_xml(res["text"])).find("item")):
+            a["kind"], a["held_new"] = "format_drift", True        # 새 형식 그대로 저장하지 않고 보류(복구 뒤 다시 받는다)
     return a
 
 
@@ -544,7 +572,13 @@ def upsert_state(db, code, h, w, o, t, changed=False, missing_since=None):
 
 def apply_action(db, a, res, ctx):
     kind, code, t, old = a["kind"], a["code"], ctx["now"], a["old"]
-    if kind == "still_empty":
+    if kind in ("verified", "edited", "headword_changed", "added", "deleted"):
+        db.execute("DELETE FROM format_drift_held WHERE target_code=?", (code,))     # 정상 형식으로 확인됨: 보류 해제
+    if kind == "format_drift":
+        hold_drift(db, code, t, new=a.get("held_new", False))
+        if old is not None:                                   # 기존 항목은 '확인함'으로 표시해 오래된 순서 순환이 제자리에 머물지 않게 한다
+            upsert_state(db, code, old["hash"], old["word"], old["origin"], t, missing_since=old.get("missing_since"))
+    elif kind == "still_empty":
         db.execute("UPDATE fetch_state SET fetched_at=? WHERE target_code=?", (t, code))
     elif kind == "verified":
         upsert_state(db, code, old["hash"], old["word"], old["origin"], t)
@@ -605,13 +639,6 @@ def run_refresh(client, db, codes, mode, args, stop_after_empty=0):
     def flush():
         if not pending:
             return True
-        drift = [a["code"] for a, _ in pending if a["kind"] == "format_drift"]
-        if drift:
-            print(f"\n⚠ 이상 징후: API 응답 형식이 바뀐 것으로 보이는 항목 {len(drift)}건(어휘 관계 type 이 비었거나 링크가 새 사이트 주소) {drift[:8]}.")
-            print("  내용 수정이 아니라 형식 변경일 수 있어 이 묶음은 반영하지 않고 중단합니다. 누리집을 확인한 뒤 수집·빌드를 새 형식에 맞게 고쳐야 합니다.")
-            pending.clear()
-            state["completed"] = False
-            return False
         cap = getattr(args, "max_deletes", MAX_DELETES_PER_RUN)
         capped = delete_cap_exceeded(counts["deleted"], pending, cap)
         if capped or is_anomaly(pending, mode):
@@ -685,7 +712,7 @@ def run_refresh(client, db, codes, mode, args, stop_after_empty=0):
 
 
 LABELS = [("verified", "변화 없음"), ("edited", "내용 수정"), ("headword_changed", "표제어/원어 교체"),
-          ("format_drift", "형식 변경 의심(반영 안 함)"), ("added", "신규"), ("delete_suspect", "삭제 의심"), ("suspect_deleted", "삭제 의심(첫 확인)"),
+          ("format_drift", "형식 변경 의심(보류)"), ("added", "신규"), ("delete_suspect", "삭제 의심"), ("suspect_deleted", "삭제 의심(첫 확인)"),
           ("suspect_waiting", "삭제 의심(대기 중)"), ("deleted", "삭제 확정"), ("still_empty", "여전히 빈 코드"),
           ("tail_empty", "뒤쪽 빈 코드"), ("skip_unscanned", "건너뜀(수집 전)"), ("skip_error", "건너뜀(오류 상태)"),
           ("error", "조회 오류")]
@@ -716,6 +743,9 @@ def code_stream(db, args):
             "WHERE f.status='ok' ORDER BY COALESCE(s.last_verified, f.fetched_at) ASC, f.target_code LIMIT ?",
             (args.oldest,))
         return [r[0] for r in rows], 0
+    if args.held:
+        rows = db.execute("SELECT target_code FROM format_drift_held ORDER BY last_seen ASC, target_code LIMIT ?", (args.held,))
+        return [r[0] for r in rows], 0
     if args.empties:
         rows = db.execute("SELECT target_code FROM fetch_state WHERE status='empty' "
                           "ORDER BY fetched_at ASC, target_code LIMIT ?", (args.empties,))
@@ -725,11 +755,29 @@ def code_stream(db, args):
     return itertools.count(max_ok + 1), args.stop_after_empty
 
 
+def settle_drift(db, counts):
+    """--held 로 보류 항목을 다시 확인한 결과로 형식 변경 모드를 유지할지 끝낼지 정한다. 반환: still | recovered | None."""
+    drifted = counts.get("format_drift", 0)
+    fine = sum(counts.get(k, 0) for k in ("verified", "edited", "headword_changed", "added"))
+    left = db.execute("SELECT COUNT(*) FROM format_drift_held").fetchone()[0]
+    if drifted:
+        print(f"형식 변경이 계속됩니다: 보류 목록 {left:,}건 (이번에 다시 확인한 것 중 {drifted}건이 여전히 새 형식)")
+        return "still"
+    if meta_get(db, DRIFT_MARK) and (fine or not left):
+        db.execute("DELETE FROM sync_meta WHERE key=?", (DRIFT_MARK,))
+        db.commit()
+        print(f"✅ API 응답 형식이 복구된 것으로 확인했습니다(보류 목록에서 {fine}건이 정상 형식). 남은 보류 {left:,}건은 다음 실행부터 다시 확인합니다.")
+        return "recovered"
+    return None
+
+
 def cmd_refresh(args):
     db = open_sync_db()
     client = sf.Client(sf.load_key(), db, args.limit, args.sleep)
     codes, stop = code_stream(db, args)
-    completed, _ = run_refresh(client, db, codes, "verify", args, stop_after_empty=stop)
+    completed, counts = run_refresh(client, db, codes, "verify", args, stop_after_empty=stop)
+    if args.held:
+        settle_drift(db, counts)
     print(f"오늘 호출 {client.used_today()}/{args.limit}")
     if not completed:
         sys.exit(2)
@@ -1081,6 +1129,7 @@ def main():
     g.add_argument("--sample", type=int, metavar="N", help="무작위 ok 코드 N개")
     g.add_argument("--oldest", type=int, metavar="N", help="가장 오래 확인 안 한 ok 코드 N개")
     g.add_argument("--empties", type=int, metavar="N", help="가장 오래 확인 안 한 빈 코드 N개")
+    g.add_argument("--held", type=int, metavar="N", help="형식 변경 의심으로 보류한 코드 N개 다시 확인(복구 점검 겸)")
     g.add_argument("--tail", action="store_true", help="최대 ok 코드 뒤쪽 신규 확인")
     rf.add_argument("--stop-after-empty", type=int, default=1000, help="--tail 에서 빈 코드가 N개 연속되면 중단(기본 1000)")
     rf.add_argument("--seed", type=int, default=None, help="--sample 난수 시드")
