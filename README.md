@@ -23,7 +23,7 @@ LLM이 기억이 아니라 사전을 보고 표기·발음·뜻·한자를 확�
 
 ## 준비
 
-1. [오픈 API 사용 신청](https://stdict.korean.go.kr/openapi/openApiInfo.do)으로 인증키를 받아 `.env`에 둡니다.
+1. [오픈 API 사용 신청](https://kdict.korean.go.kr/standard/openapi/openApiInfo.do)으로 인증키를 받아 `.env`에 둡니다.
    ```
    STDICT_API_KEY=발급받은키
    ```
