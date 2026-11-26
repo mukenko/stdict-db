@@ -36,7 +36,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 DB_PATH = Path(os.environ.get("STDICT_DB", ROOT / "data" / "raw.sqlite"))
-BASE_URL = os.environ.get("STDICT_BASE_URL", "https://stdict.korean.go.kr").rstrip("/")
+BASE_URL = os.environ.get("STDICT_BASE_URL", "https://kdict.korean.go.kr/standard").rstrip("/")   # 2026-11: 옛 stdict.korean.go.kr 에서 이전
 DEFAULT_LIMIT = 45000          # 하루 공식 한도 50,000건보다 여유를 둔다
 MAX_CONSECUTIVE_ERRORS = 3     # 연속 오류가 이 횟수에 이르면 중단
 KNOWN_CODES = [1, 2, 236195, 236214, 358706, 459493]  # 표본에 항상 포함할 코드

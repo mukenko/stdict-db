@@ -164,8 +164,8 @@ class Server(unittest.TestCase):
         hrefs = re.findall(r'<article id="e(\d+)">.*?<a class="site" href="([^"]+)"', page)
         self.assertEqual([int(c) for c, _ in hrefs], codes)
         for code, href in hrefs:                                   # HTML 속성이므로 & 는 &amp; 로 이스케이프됨
-            self.assertEqual(href, f"https://stdict.korean.go.kr/search/searchView.do?word_no={code}&amp;searchKeywordTo=3")
-        self.assertEqual(sp.original_url(236214), "https://stdict.korean.go.kr/search/searchView.do?word_no=236214&searchKeywordTo=3")
+            self.assertEqual(href, f"https://kdict.korean.go.kr/standard/search/searchView.do?wordNo={code}&amp;searchKeywordTo=3")
+        self.assertEqual(sp.original_url(236214), "https://kdict.korean.go.kr/standard/search/searchView.do?wordNo=236214&searchKeywordTo=3")
         self.assertEqual(page.count('<a class="site" '), 12)         # 항목 버튼(맨 아래 '연기-…' 표제어 링크는 따로)
         self.assertEqual(len(re.findall(r'<a class="site" [^>]*target="_blank" rel="noopener noreferrer"', page)), 12)
 
@@ -196,7 +196,7 @@ class Server(unittest.TestCase):
         entry = body.decode("utf-8")
         self.assertEqual(entry.count("<article"), 1)
         self.assertIn("제작하다²", entry)
-        self.assertIn("word_no=288964&amp;searchKeywordTo=3", entry)  # 그 화면에는 누리집 버튼이 있다
+        self.assertIn("wordNo=288964&amp;searchKeywordTo=3", entry)  # 그 화면에는 누리집 버튼이 있다
         self.assertEqual(get(self.port, "/e/999999999")[0], 404)            # 없는 코드
         self.assertEqual(get(self.port, "/e/abc")[0], 400)
         self.assertEqual(get(self.port, "/e/1%27")[0], 400)

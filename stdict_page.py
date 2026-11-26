@@ -15,7 +15,7 @@ from pathlib import Path
 
 import stdict_lookup as sl
 
-SITE_VIEW = "https://stdict.korean.go.kr/search/searchView.do"
+SITE_VIEW = "https://kdict.korean.go.kr/standard/search/searchView.do"
 # 옛한글(어원의 옛 글자)은 시스템 글꼴로는 깨진다: 나눔바른고딕 옛한글판을 서버가 /f/font.otf 로 한 번만 보내 웹 글꼴로 쓴다
 # (Safari 는 설치된 글꼴을 웹 페이지가 못 쓰게 막으므로 설치만으로는 안 된다). 글꼴이 없으면 일반 시스템 글꼴이다.
 FONT_FILE = "NanumBarunGothic-YetHangul.otf"
@@ -47,7 +47,7 @@ def find_font():
 
 def original_url(target_code):
     """국립국어원 누리집에서 그 항목 하나를 여는 주소(word_no = target_code)."""
-    return f"{SITE_VIEW}?word_no={int(target_code)}&searchKeywordTo=3"
+    return f"{SITE_VIEW}?wordNo={int(target_code)}&searchKeywordTo=3"
 
 
 def esc(text):
