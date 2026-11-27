@@ -122,9 +122,21 @@ def chan(root):
     return root
 
 
+_NEW_SITE_LINK = re.compile(r"https?://kdict\.korean\.go\.kr/standard/search/searchView\.do\?wordNo=(\d+)")
+
+
+def canon_text(e):
+    text = (e.text or "").strip()
+    if e.tag == "link":
+        # 2026-11 사이트 이전: 항목 링크가 새 주소(kdict.../standard/..., wordNo=)로 바뀜. 옛 형식으로 바꿔 해시가 같게 한다
+        text = _NEW_SITE_LINK.sub(r"https://stdict.korean.go.kr/search/searchView.do?word_no=\1", text)
+    return text
+
+
 def canon(e):
-    """공백 차이를 없앤 정규화 문자열(속성·tail 무시). 응답의 lastBuildDate 는 item 밖이라 해시에 들어가지 않는다."""
-    return f"<{e.tag}>{(e.text or '').strip()}" + "".join(canon(c) for c in e) + f"</{e.tag}>"
+    """공백 차이를 없앤 정규화 문자열(속성·tail 무시). 응답의 lastBuildDate 는 item 밖이라 해시에 들어가지 않는다.
+    항목 링크의 새 사이트 주소는 옛 주소 형식으로 정규화한다(저장된 해시와 비교할 수 있게)."""
+    return f"<{e.tag}>{canon_text(e)}" + "".join(canon(c) for c in e) + f"</{e.tag}>"
 
 
 def item_info(item):
@@ -452,26 +464,20 @@ def load_old(db, code):
 
 
 def format_drift(old_item, new_item):
-    """내용이 아니라 API 응답 형식이 바뀐 것으로 보이는지(2026-11-20: 어휘 관계 type 이 비고 link 가 kdict.korean.go.kr 새 형식으로 바뀜).
-    ① 같은 개수의 lexical_info/relation_info 에서 이전에 있던 type 이 비어 오거나 ② 이전에 없던 새 사이트 주소의 link 가 생긴 경우.
-    이런 응답을 그대로 받으면 비슷한말·반대말 표시와 링크 번호가 사라진다."""
+    """내용이 아니라 API 응답 형식이 바뀐 것으로 보이는지(2026-11-20: 어휘 관계 type 이 비어 옴; 11/27 복구 확인).
+    같은 개수의 lexical_info/relation_info 에서 이전에 있던 type 이 비어 오면 형식 변경 의심이다. 이런 응답을 그대로 받으면
+    비슷한말·반대말 표시가 사라진다. (링크가 새 사이트 주소로 바뀐 것은 사이트 이전에 따른 영구 변경이라 의심하지 않는다:
+    canon 이 정규화하고 빌드가 새 파라미터를 읽는다.)"""
     def types(item):
         return [(e.findtext("type") or "").strip() for e in item.iter() if e.tag in ("lexical_info", "relation_info")]
 
-    def new_site(item):
-        return any("kdict.korean.go.kr" in (e.text or "") for e in item.iter("link"))
-
     old_t, new_t = types(old_item), types(new_item)
-    if len(old_t) == len(new_t) and any(o and not n for o, n in zip(old_t, new_t)):
-        return True
-    return new_site(new_item) and not new_site(old_item)
+    return len(old_t) == len(new_t) and any(o and not n for o, n in zip(old_t, new_t))
 
 
 def format_drift_new(item):
-    """로컬에 없던 신규 항목이 새 형식으로 왔는지. 예전 데이터에는 빈 lexical_info/type 도 kdict 링크도 없었다(표본 62,350건 확인)."""
-    if any((e.findtext("type") or "").strip() == "" for e in item.iter("lexical_info")):
-        return True
-    return any("kdict.korean.go.kr" in (e.text or "") for e in item.iter("link"))
+    """로컬에 없던 신규 항목의 어휘 관계 type 이 비어 왔는지. 예전 데이터에는 빈 lexical_info/type 이 없었다(표본 62,350건 확인)."""
+    return any((e.findtext("type") or "").strip() == "" for e in item.iter("lexical_info"))
 
 
 DRIFT_MARK = "format_drift_since"              # sync_meta: 형식 변경 모드가 시작된 시각(복구되면 지운다)

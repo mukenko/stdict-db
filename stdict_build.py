@@ -180,7 +180,8 @@ def add_rel(R, scope, scope_code, seq, e, with_unit):
     link = norm(e.findtext("link"))
     entry = None
     if link:
-        q = parse_qs(urlparse(link).query).get("word_no")
+        query = parse_qs(urlparse(link).query)
+        q = query.get("word_no") or query.get("wordNo")           # 2026-11: 사이트 이전으로 파라미터 이름이 바뀜
         entry = to_int(q[0]) if q else None
     R["relations"].append((scope, scope_code, seq, tx(e, "unit") if with_unit else None, tx(e, "type"),
                            tx(e, "word"), to_int(tx(e, "link_target_code")), entry))
